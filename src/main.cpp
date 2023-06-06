@@ -45,6 +45,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       INVALID_INPUT_TYPE    99
 
 // KNX BCU on Serial2
+#define       KNX_DEFAULT_ADDRESS   "1.1.244"
 #define       KNX_SERIAL_BAUD       19200
 #define       KNX_SERIAL_CONFIG     SERIAL_8E1
 #define       KNX_SERIAL_RX         16
@@ -56,8 +57,8 @@ struct KNXConfig
 {
   bool failoverOnly;
 
-  uint16_t knxCommandAddress;
-  uint16_t knxStateAddress;
+  char commandAddress[12];
+  char stateAddress[12];
 
   bool state;
 };
@@ -66,8 +67,8 @@ struct KNXConfig
 // Each bit corresponds to an MCP found on the IC2 bus
 uint8_t g_mcps_found = 0;
 
-// Force KNX flag
-bool g_force_knx = false;
+// Force KNX failover flag
+bool g_forceFailover = false;
 
 // KNX config for each possible input
 KNXConfig g_knx_config[MCP_COUNT * MCP_PIN_COUNT];
@@ -80,7 +81,7 @@ Adafruit_MCP23X17 mcp23017[MCP_COUNT];
 OXRS_Input oxrsInput[MCP_COUNT];
 
 // KNX BCU on Serial2
-KnxTpUart knx(&Serial2, KNX_IA(1, 1, 244));
+KnxTpUart knx(&Serial2, KNX_DEFAULT_ADDRESS);
 
 /*--------------------------- Program ---------------------------------*/
 uint8_t getMaxIndex()
@@ -303,22 +304,8 @@ void setDefaultInputType(uint8_t inputType)
 /**
   KNX
 */
-void knxTelegram(KnxTelegram * telegram, bool interesting)
-{
-  for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
-  {
-    if (g_knx_config[i].knxStateAddress == telegram->getTargetGroupAddress())
-    {
-      g_knx_config[i].state = telegram->getBool();
-    }
-  }
-}
-
 void initialiseKnxSerial()
 {
-  // Listen for telegrams addressed to our KNX state addresses 
-  knx.setKnxTelegramCallback(knxTelegram);
-
   oxrs.println(F("[knx] setting up Serial2 for KNX BCU..."));
   oxrs.print(F(" - baud:   "));
   oxrs.println(KNX_SERIAL_BAUD);
@@ -335,17 +322,11 @@ void initialiseKnxSerial()
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 {
   // Determine the KNX group address to use for this index (if any)...
-  uint16_t knxCommandAddress = g_knx_config[index - 1].knxCommandAddress;
+  char * commandAddress = g_knx_config[index - 1].commandAddress;
   
-  oxrs.print(F("[knx] knx command address "));
-
-  if (knxCommandAddress == 0)
-  {
-    oxrs.println(F("not configured, ignoring"));
+  // Ignore if no KNX command address configured  
+  if (strlen(commandAddress) == 0)
     return;
-  }
-
-  oxrs.println(knxCommandAddress);
 
   // Determine what type of KNX telegram to send...
   switch (type)
@@ -355,21 +336,23 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       if (state != HOLD_EVENT)
       {
         // Toggle internal state and send boolean telegram with new state
-        knx.groupWriteBool(knxCommandAddress, !g_knx_config[index - 1].state);
+        g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
+        knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state);
       }
       break;
     case ROTARY:
       // Send relative inc/dec dimming telegram (no internal state needed)
-      knx.groupWrite4BitDim(knxCommandAddress, state == LOW_EVENT, 5);
+      knx.groupWrite4BitDim(commandAddress, state == LOW_EVENT, 5);
       break;
     case SWITCH:
       // Send boolean telegram (no internal state needed)
-      knx.groupWriteBool(knxCommandAddress, state == LOW_EVENT);
+      knx.groupWriteBool(commandAddress, state == LOW_EVENT);
       break;
     case PRESS:
     case TOGGLE:
       // Toggle internal state and send boolean telegram with new state
-      knx.groupWriteBool(knxCommandAddress, !g_knx_config[index - 1].state);
+      g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
+      knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state);
       break;  
   }
 }
@@ -493,12 +476,12 @@ void jsonInputConfig(JsonVariant json)
 
   if (json.containsKey("knxCommandAddress"))
   {
-    g_knx_config[index - 1].knxCommandAddress = knx.getGroupAddress(json["knxCommandAddress"]);
+    strcpy(g_knx_config[index - 1].commandAddress, json["knxCommandAddress"]);
   }
 
   if (json.containsKey("knxStateAddress"))
   {
-    g_knx_config[index - 1].knxStateAddress = knx.getGroupAddress(json["knxStateAddress"]);
+    strcpy(g_knx_config[index - 1].stateAddress, json["knxStateAddress"]);
   }
 
   if (json.containsKey("knxFailoverOnly"))
@@ -524,7 +507,7 @@ void jsonConfig(JsonVariant json)
     token = strtok(NULL, delimiter);
     int member = atoi(token);
 
-    knx.setIndividualAddress(KNX_IA(area, line, member));
+    knx.setIndividualAddress(area, line, member);
   }
 
   if (json.containsKey("defaultInputType"))
@@ -554,10 +537,10 @@ void setCommandSchema()
   // Define our command schema
   StaticJsonDocument<1024> json;
 
-  JsonObject forceKnx = json.createNestedObject("forceKnx");
-  forceKnx["title"] = "Force KNX";
-  forceKnx["description"] = "By-pass publishing input events to MQTT and always publish to KNX, regardless of IP/MQTT connection state.";
-  forceKnx["type"] = "boolean";
+  JsonObject forceFailover = json.createNestedObject("forceFailover");
+  forceFailover["title"] = "Force KNX";
+  forceFailover["description"] = "By-pass publishing input events to MQTT and always publish to KNX, regardless of IP/MQTT connection state.";
+  forceFailover["type"] = "boolean";
 
   // Pass our command schema down to the hardware library
   oxrs.setCommandSchema(json.as<JsonVariant>());
@@ -565,9 +548,9 @@ void setCommandSchema()
 
 void jsonCommand(JsonVariant json)
 {
-  if (json.containsKey("forceKnx"))
+  if (json.containsKey("forceFailover"))
   {
-    g_force_knx = json["forceKnx"].as<bool>();
+    g_forceFailover = json["forceFailover"].as<bool>();
   }
 }
 
@@ -590,7 +573,7 @@ void publishEvent(uint8_t index, uint8_t type, uint8_t state)
   json["event"] = eventType;
 
   // Always publish this event to MQTT, unless in forced failover
-  bool failover = g_force_knx;
+  bool failover = g_forceFailover;
   if (!failover)
   {
     failover = !oxrs.publishStatus(json.as<JsonVariant>());
