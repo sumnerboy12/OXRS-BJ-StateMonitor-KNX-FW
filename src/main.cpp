@@ -357,6 +357,16 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
   }
 }
 
+void createKnxValueEnum(JsonObject parent)
+{
+  JsonArray valueEnum = parent.createNestedArray("enum");
+  
+  valueEnum.add("on");
+  valueEnum.add("off");
+  valueEnum.add("up");
+  valueEnum.add("down");
+}
+
 /**
   Config handler
  */
@@ -542,6 +552,25 @@ void setCommandSchema()
   forceFailover["description"] = "By-pass publishing input events to MQTT and always publish to KNX, regardless of IP/MQTT connection state.";
   forceFailover["type"] = "boolean";
 
+  JsonObject knxCommands = json.createNestedObject("knxCommands");
+  knxCommands["title"] = "KNX Commands";
+  knxCommands["description"] = "Send one or more telegrams directly onto the KNX bus.";
+  knxCommands["type"] = "array";
+  
+  JsonObject knxCommandItems = knxCommands.createNestedObject("items");
+  knxCommandItems["type"] = "object";
+
+  JsonObject knxCommandProperties = knxCommandItems.createNestedObject("properties");
+
+  JsonObject knxGroupAddress = knxCommandProperties.createNestedObject("knxGroupAddress");
+  knxGroupAddress["title"] = "KNX Group Address";
+  knxGroupAddress["type"] = "string";
+  knxGroupAddress["pattern"] = "^\\d+\\/\\d+\\/\\d+$";
+
+  JsonObject knxValue = knxCommandProperties.createNestedObject("knxValue");
+  knxValue["title"] = "KNX Value";
+  createKnxValueEnum(knxValue);
+
   // Pass our command schema down to the hardware library
   oxrs.setCommandSchema(json.as<JsonVariant>());
 }
@@ -551,6 +580,29 @@ void jsonCommand(JsonVariant json)
   if (json.containsKey("forceFailover"))
   {
     g_forceFailover = json["forceFailover"].as<bool>();
+  }
+
+  if (json.containsKey("knxCommands"))
+  {
+    for (JsonVariant command : json["knxCommands"].as<JsonArray>())
+    {
+      if (strcmp(command["knxValue"], "on") == 0)
+      {
+        knx.groupWriteBool(command["knxGroupAddress"], true);
+      }
+      else if (strcmp(command["knxValue"], "off") == 0)
+      {
+        knx.groupWriteBool(command["knxGroupAddress"], false);
+      }
+      else if (strcmp(command["knxValue"], "up") == 0)
+      {
+        knx.groupWriteBool(command["knxGroupAddress"], false);
+      }
+      else if (strcmp(command["knxValue"], "down") == 0)
+      {
+        knx.groupWriteBool(command["knxGroupAddress"], true);
+      }
+    }
   }
 }
 
