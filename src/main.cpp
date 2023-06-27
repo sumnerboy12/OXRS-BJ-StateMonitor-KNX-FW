@@ -304,8 +304,38 @@ void setDefaultInputType(uint8_t inputType)
 /**
   KNX
 */
+bool knxTelegramCheck(KnxTelegram * telegram)
+{
+  for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
+  {
+    if (g_knx_config[i].stateAddress == telegram->getTargetGroupAddress())
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void knxTelegram(KnxTelegram * telegram, bool interesting)
+{
+  if (!interesting) return;
+
+  for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
+  {
+    if (g_knx_config[i].stateAddress == telegram->getTargetGroupAddress())
+    {
+      g_knx_config[i].state = telegram->getBool();
+    }
+  }
+}
+
 void initialiseKnxSerial()
 {
+  // Listen for telegrams addressed to our KNX state addresses 
+  knx.setTelegramCheckCallback(knxTelegramCheck);
+  knx.setKnxTelegramCallback(knxTelegram);
+
   oxrs.println(F("[knx] setting up Serial2 for KNX BCU..."));
   oxrs.print(F(" - baud:   "));
   oxrs.println(KNX_SERIAL_BAUD);
@@ -336,8 +366,7 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       if (state != HOLD_EVENT)
       {
         // Toggle internal state and send boolean telegram with new state
-        g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-        knx.groupWriteBool(address, g_knx_config[index - 1].state);
+        knx.groupWriteBool(address, !g_knx_config[index - 1].state);
       }
       break;
     case ROTARY:
@@ -351,8 +380,7 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
     case PRESS:
     case TOGGLE:
       // Toggle internal state and send boolean telegram with new state
-      g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-      knx.groupWriteBool(address, g_knx_config[index - 1].state);
+      knx.groupWriteBool(address, !g_knx_config[index - 1].state);
       break;  
   }
 }
