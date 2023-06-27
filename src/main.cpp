@@ -45,7 +45,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       INVALID_INPUT_TYPE    99
 
 // KNX BCU on Serial2
-#define       KNX_DEFAULT_ADDRESS   "1.1.244"
+#define       KNX_DEFAULT_ADDRESS   KNX_IA(1, 1, 244)
 #define       KNX_SERIAL_BAUD       19200
 #define       KNX_SERIAL_CONFIG     SERIAL_8E1
 #define       KNX_SERIAL_RX         16
@@ -57,8 +57,8 @@ struct KNXConfig
 {
   bool failoverOnly;
 
-  char commandAddress[12];
-  char stateAddress[12];
+  uint16_t commandAddress;
+  uint16_t stateAddress;
 
   bool state;
 };
@@ -322,10 +322,10 @@ void initialiseKnxSerial()
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 {
   // Determine the KNX group address to use for this index (if any)...
-  char * commandAddress = g_knx_config[index - 1].commandAddress;
+  uint16_t commandAddress = g_knx_config[index - 1].commandAddress;
   
   // Ignore if no KNX command address configured  
-  if (strlen(commandAddress) == 0)
+  if (commandAddress == 0)
     return;
 
   // Determine what type of KNX telegram to send...
@@ -337,22 +337,22 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       {
         // Toggle internal state and send boolean telegram with new state
         g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-        knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state);
+        knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state, false);
       }
       break;
     case ROTARY:
       // Send relative inc/dec dimming telegram (no internal state needed)
-      knx.groupWrite4BitDim(commandAddress, state == LOW_EVENT, 5);
+      knx.groupWrite4BitDim(commandAddress, state == LOW_EVENT, 5, false);
       break;
     case SWITCH:
       // Send boolean telegram (no internal state needed)
-      knx.groupWriteBool(commandAddress, state == LOW_EVENT);
+      knx.groupWriteBool(commandAddress, state == LOW_EVENT, false);
       break;
     case PRESS:
     case TOGGLE:
       // Toggle internal state and send boolean telegram with new state
       g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-      knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state);
+      knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state, false);
       break;  
   }
 }
@@ -486,12 +486,12 @@ void jsonInputConfig(JsonVariant json)
 
   if (json.containsKey("knxCommandAddress"))
   {
-    strcpy(g_knx_config[index - 1].commandAddress, json["knxCommandAddress"]);
+    g_knx_config[index - 1].commandAddress = knx.getGroupAddress(json["knxCommandAddress"].as<String>());
   }
 
   if (json.containsKey("knxStateAddress"))
   {
-    strcpy(g_knx_config[index - 1].stateAddress, json["knxStateAddress"]);
+    g_knx_config[index - 1].stateAddress = knx.getGroupAddress(json["knxStateAddress"].as<String>());
   }
 
   if (json.containsKey("knxFailoverOnly"))
@@ -504,20 +504,7 @@ void jsonConfig(JsonVariant json)
 {
   if (json.containsKey("knxDeviceAddress"))
   {
-    const char * knxDeviceAddress = json["knxDeviceAddress"];
-    const char * delimiter = ".";
-
-    char buffer[strlen(knxDeviceAddress) + 1];
-    strcpy(buffer, knxDeviceAddress);
-
-    char * token = strtok(buffer, delimiter);
-    int area = atoi(token);
-    token = strtok(NULL, delimiter);
-    int line = atoi(token);
-    token = strtok(NULL, delimiter);
-    int member = atoi(token);
-
-    knx.setIndividualAddress(area, line, member);
+    knx.setIndividualAddress(knx.getSourceAddress(json["knxDeviceAddress"].as<String>()));
   }
 
   if (json.containsKey("defaultInputType"))
