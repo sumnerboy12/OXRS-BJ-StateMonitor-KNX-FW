@@ -322,10 +322,10 @@ void initialiseKnxSerial()
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 {
   // Determine the KNX group address to use for this index (if any)...
-  uint16_t commandAddress = g_knx_config[index - 1].commandAddress;
+  uint16_t address = g_knx_config[index - 1].commandAddress;
   
   // Ignore if no KNX command address configured  
-  if (commandAddress == 0)
+  if (address == 0)
     return;
 
   // Determine what type of KNX telegram to send...
@@ -337,22 +337,22 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       {
         // Toggle internal state and send boolean telegram with new state
         g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-        knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state, false);
+        knx.groupWriteBool(address, g_knx_config[index - 1].state);
       }
       break;
     case ROTARY:
       // Send relative inc/dec dimming telegram (no internal state needed)
-      knx.groupWrite4BitDim(commandAddress, state == LOW_EVENT, 5, false);
+      knx.groupWrite4BitDim(address, state == LOW_EVENT, 5);
       break;
     case SWITCH:
       // Send boolean telegram (no internal state needed)
-      knx.groupWriteBool(commandAddress, state == LOW_EVENT, false);
+      knx.groupWriteBool(address, state == LOW_EVENT);
       break;
     case PRESS:
     case TOGGLE:
       // Toggle internal state and send boolean telegram with new state
       g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-      knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state, false);
+      knx.groupWriteBool(address, g_knx_config[index - 1].state);
       break;  
   }
 }
@@ -573,21 +573,23 @@ void jsonCommand(JsonVariant json)
   {
     for (JsonVariant command : json["knxCommands"].as<JsonArray>())
     {
+      uint16_t address = knx.getGroupAddress(command["knxGroupAddress"].as<String>());
+
       if (strcmp(command["knxValue"], "on") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], true);
+        knx.groupWriteBool(address, true);
       }
       else if (strcmp(command["knxValue"], "off") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], false);
+        knx.groupWriteBool(address, false);
       }
       else if (strcmp(command["knxValue"], "up") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], false);
+        knx.groupWriteBool(address, false);
       }
       else if (strcmp(command["knxValue"], "down") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], true);
+        knx.groupWriteBool(address, true);
       }
     }
   }
