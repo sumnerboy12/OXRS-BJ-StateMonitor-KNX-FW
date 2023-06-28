@@ -70,7 +70,7 @@ uint8_t g_mcps_found = 0;
 // Force KNX failover flag
 bool g_forceFailover = false;
 
-// KNX config for each possible input
+// KNX config for every input
 KNXConfig g_knx_config[MCP_COUNT * MCP_PIN_COUNT];
 
 /*--------------------------- Instantiate Globals ---------------------*/
@@ -306,9 +306,17 @@ void setDefaultInputType(uint8_t inputType)
 */
 bool knxTelegramCheck(KnxTelegram * telegram)
 {
+  // Only interested in write telegrams - i.e. a device publishing it's state 
+  if (telegram->getCommand() != KNX_COMMAND_WRITE)
+    return false;
+
+  // Get the telegram address to save looking up for each loop iteration
+  uint16_t targetAddress = telegram->getTargetGroupAddress();
+
+  // Ensure we show interest where required, so an ACK can be sent 
   for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
   {
-    if (g_knx_config[i].stateAddress == telegram->getTargetGroupAddress())
+    if (g_knx_config[i].stateAddress == targetAddress)
     {
       return true;
     }
@@ -319,23 +327,35 @@ bool knxTelegramCheck(KnxTelegram * telegram)
 
 void knxTelegram(KnxTelegram * telegram, bool interesting)
 {
-  if (!interesting) return;
+  // Ignore any telegrams we didn't identify as being interesting
+  if (!interesting)
+    return;
 
+  // We are only interested in 1-bit (bool) values
+  if (telegram->getPayloadLength() != 2)
+    return;
+
+  // Get the telegram address/value to save looking up for each loop iteration
+  uint16_t targetAddress = telegram->getTargetGroupAddress();
+  bool value = telegram->getBool();
+
+  // Update our internal state for any inputs with this stateAddress
   for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
   {
-    if (g_knx_config[i].stateAddress == telegram->getTargetGroupAddress())
+    if (g_knx_config[i].stateAddress == targetAddress)
     {
-      g_knx_config[i].state = telegram->getBool();
+      g_knx_config[i].state = value;
     }
   }
 }
 
-void initialiseKnxSerial()
+void initialiseKnx()
 {
   // Listen for telegrams addressed to our KNX state addresses 
   knx.setTelegramCheckCallback(knxTelegramCheck);
   knx.setKnxTelegramCallback(knxTelegram);
 
+  // Configure the second serial port on the ESP32 for the KNX BCU
   oxrs.println(F("[knx] setting up Serial2 for KNX BCU..."));
   oxrs.print(F(" - baud:   "));
   oxrs.println(KNX_SERIAL_BAUD);
@@ -351,11 +371,11 @@ void initialiseKnxSerial()
 
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 {
-  // Determine the KNX group address to use for this index (if any)...
-  uint16_t address = g_knx_config[index - 1].commandAddress;
+  // Get the KNX group address configured for this input (if any)...
+  uint16_t commandAddress = g_knx_config[index - 1].commandAddress;
   
   // Ignore if no KNX command address configured  
-  if (address == 0)
+  if (commandAddress == 0)
     return;
 
   // Determine what type of KNX telegram to send...
@@ -365,22 +385,22 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       // Ignore HOLD events and treat all multi-press events as a TOGGLE
       if (state != HOLD_EVENT)
       {
-        // Toggle internal state and send boolean telegram with new state
-        knx.groupWriteBool(address, !g_knx_config[index - 1].state);
+        // Send boolean telegram with toggled state
+        knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
       }
       break;
     case ROTARY:
       // Send relative inc/dec dimming telegram (no internal state needed)
-      knx.groupWrite4BitDim(address, state == LOW_EVENT, 5);
+      knx.groupWrite4BitDim(commandAddress, state == LOW_EVENT, 5);
       break;
     case SWITCH:
       // Send boolean telegram (no internal state needed)
-      knx.groupWriteBool(address, state == LOW_EVENT);
+      knx.groupWriteBool(commandAddress, state == LOW_EVENT);
       break;
     case PRESS:
     case TOGGLE:
-      // Toggle internal state and send boolean telegram with new state
-      knx.groupWriteBool(address, !g_knx_config[index - 1].state);
+      // Send boolean telegram with toggled state
+      knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
       break;  
   }
 }
@@ -739,8 +759,8 @@ void setup()
   // Speed up I2C clock for faster scan rate (after bus scan)
   Wire.setClock(I2C_CLOCK_SPEED);
 
-  // Set up the KNX serial port
-  initialiseKnxSerial();
+  // Set up KNX callbacks and serial comms to BCU
+  initialiseKnx();
 }
 
 /**
