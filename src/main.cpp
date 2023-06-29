@@ -69,7 +69,7 @@ struct KNXConfig
   // current state of the KNX actuator
   bool state;
 
-  // set to true once we have requested the current value on startup
+  // set to true to trigger a GroupRead request
   bool stateRead;
 };
 
@@ -388,21 +388,18 @@ void loopKnx()
   // Check for any events on the KNX bus
   knx.serialEvent();
 
-  // Check if we have any inputs waiting for state update requests
+  // Check if we have any inputs waiting for GroupRead requests (one per loop)
   for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
   {
-    // Ignore if we have already sent a read request
-    if (g_knx_config[i].stateRead)
+    if (!g_knx_config[i].stateRead)
       continue;
 
-    // If this input has a state address then send the read request
     if (g_knx_config[i].stateAddress != 0)
     {
       knx.groupRead(g_knx_config[i].stateAddress);
     }
 
-    // Stop after sending a request, the next input will be handled in the next loop
-    g_knx_config[i].stateRead = true;
+    g_knx_config[i].stateRead = false;
     break;
   }
 }
@@ -612,7 +609,7 @@ void jsonInputConfig(JsonVariant json)
   if (json.containsKey("knxStateAddress"))
   {
     g_knx_config[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
-    g_knx_config[index - 1].stateRead = false;
+    g_knx_config[index - 1].stateRead = true;
   }
 
   if (json.containsKey("knxFailoverOnly"))
