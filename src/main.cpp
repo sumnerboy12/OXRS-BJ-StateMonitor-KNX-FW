@@ -51,6 +51,9 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       KNX_SERIAL_RX         16
 #define       KNX_SERIAL_TX         17
 
+// Max number of supported inputs
+const uint8_t MAX_INPUT_COUNT       = MCP_COUNT * MCP_PIN_COUNT;
+
 /*-------------------------- Internal datatypes --------------------------*/
 // Used to store KNX config/state
 struct KNXConfig
@@ -71,7 +74,7 @@ uint8_t g_mcps_found = 0;
 bool g_forceFailover = false;
 
 // KNX config for every input
-KNXConfig g_knx_config[MCP_COUNT * MCP_PIN_COUNT];
+KNXConfig g_knx_config[MAX_INPUT_COUNT];
 
 /*--------------------------- Instantiate Globals ---------------------*/
 // I/O buffers
@@ -306,15 +309,15 @@ void setDefaultInputType(uint8_t inputType)
 */
 bool knxTelegramCheck(KnxTelegram * telegram)
 {
-  // Only interested in write telegrams - i.e. a device publishing it's state 
-  if (telegram->getCommand() != KNX_COMMAND_WRITE)
+  // Check this is a message sent to a target group 
+  if (!telegram->isTargetGroup())
     return false;
 
   // Get the telegram address to save looking up for each loop iteration
   uint16_t targetAddress = telegram->getTargetGroupAddress();
 
   // Ensure we show interest where required, so an ACK can be sent 
-  for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
   {
     if (g_knx_config[i].stateAddress == targetAddress)
     {
@@ -331,7 +334,11 @@ void knxTelegram(KnxTelegram * telegram, bool interesting)
   if (!interesting)
     return;
 
-  // We are only interested in 1-bit (bool) values
+  // Only interested in write telegrams - i.e. a device publishing it's state 
+  if (telegram->getCommand() != KNX_COMMAND_WRITE)
+    return;
+
+  // Only interested in 1-bit (bool) values
   if (telegram->getPayloadLength() != 2)
     return;
 
@@ -340,7 +347,7 @@ void knxTelegram(KnxTelegram * telegram, bool interesting)
   bool value = telegram->getBool();
 
   // Update our internal state for any inputs with this stateAddress
-  for (uint8_t i = 0; i < sizeof(g_knx_config); i++)
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
   {
     if (g_knx_config[i].stateAddress == targetAddress)
     {
@@ -483,6 +490,40 @@ void setConfigSchema()
   oxrs.setConfigSchema(json.as<JsonVariant>());
 }
 
+uint16_t parseDeviceAddress(const char * address)
+{
+  const char * delimiter = ".";
+
+  char buffer[strlen(address) + 1];
+  strcpy(buffer, address);
+
+  char * token = strtok(buffer, delimiter);
+  int area = atoi(token);
+  token = strtok(NULL, delimiter);
+  int line = atoi(token);
+  token = strtok(NULL, delimiter);
+  int member = atoi(token);
+
+  return KNX_IA(area, line, member);
+}
+
+uint16_t parseGroupAddress(const char * address)
+{
+  const char * delimiter = "/";
+
+  char buffer[strlen(address) + 1];
+  strcpy(buffer, address);
+
+  char * token = strtok(buffer, delimiter);
+  int main = atoi(token);
+  token = strtok(NULL, delimiter);
+  int mid = atoi(token);
+  token = strtok(NULL, delimiter);
+  int sub = atoi(token);
+
+  return KNX_GA(main, mid, sub);
+}
+
 uint8_t getIndex(JsonVariant json)
 {
   if (!json.containsKey("index"))
@@ -534,12 +575,12 @@ void jsonInputConfig(JsonVariant json)
 
   if (json.containsKey("knxCommandAddress"))
   {
-    g_knx_config[index - 1].commandAddress = knx.getGroupAddress(json["knxCommandAddress"].as<String>());
+    g_knx_config[index - 1].commandAddress = parseGroupAddress(json["knxCommandAddress"]);
   }
 
   if (json.containsKey("knxStateAddress"))
   {
-    g_knx_config[index - 1].stateAddress = knx.getGroupAddress(json["knxStateAddress"].as<String>());
+    g_knx_config[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
   }
 
   if (json.containsKey("knxFailoverOnly"))
@@ -552,7 +593,7 @@ void jsonConfig(JsonVariant json)
 {
   if (json.containsKey("knxDeviceAddress"))
   {
-    knx.setIndividualAddress(knx.getSourceAddress(json["knxDeviceAddress"].as<String>()));
+    knx.setIndividualAddress(parseDeviceAddress(json["knxDeviceAddress"]));
   }
 
   if (json.containsKey("defaultInputType"))
@@ -621,7 +662,7 @@ void jsonCommand(JsonVariant json)
   {
     for (JsonVariant command : json["knxCommands"].as<JsonArray>())
     {
-      uint16_t address = knx.getGroupAddress(command["knxGroupAddress"].as<String>());
+      uint16_t address = parseGroupAddress(command["knxGroupAddress"]);
 
       if (strcmp(command["knxValue"], "on") == 0)
       {
