@@ -45,11 +45,14 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       INVALID_INPUT_TYPE    99
 
 // KNX BCU on Serial2
-#define       KNX_DEFAULT_ADDRESS   "1.1.244"
+#define       KNX_DEFAULT_ADDRESS   KNX_IA(1, 1, 244)
 #define       KNX_SERIAL_BAUD       19200
 #define       KNX_SERIAL_CONFIG     SERIAL_8E1
 #define       KNX_SERIAL_RX         16
 #define       KNX_SERIAL_TX         17
+
+// Max number of supported inputs
+const uint8_t MAX_INPUT_COUNT       = MCP_COUNT * MCP_PIN_COUNT;
 
 /*-------------------------- Internal datatypes --------------------------*/
 // Used to store KNX config/state
@@ -57,8 +60,8 @@ struct KNXConfig
 {
   bool failoverOnly;
 
-  char commandAddress[12];
-  char stateAddress[12];
+  uint16_t commandAddress;
+  uint16_t stateAddress;
 
   bool state;
 };
@@ -70,8 +73,8 @@ uint8_t g_mcps_found = 0;
 // Force KNX failover flag
 bool g_forceFailover = false;
 
-// KNX config for each possible input
-KNXConfig g_knx_config[MCP_COUNT * MCP_PIN_COUNT];
+// KNX config for every input
+KNXConfig g_knx_config[MAX_INPUT_COUNT];
 
 /*--------------------------- Instantiate Globals ---------------------*/
 // I/O buffers
@@ -304,8 +307,62 @@ void setDefaultInputType(uint8_t inputType)
 /**
   KNX
 */
-void initialiseKnxSerial()
+bool knxTelegramCheck(KnxTelegram * telegram)
 {
+  // Check this is a message sent to a target group 
+  if (!telegram->isTargetGroup())
+    return false;
+
+  // Get the telegram address to save looking up for each loop iteration
+  uint16_t targetAddress = telegram->getTargetGroupAddress();
+
+  // Ensure we show interest where required, so an ACK can be sent 
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+  {
+    if (g_knx_config[i].stateAddress == targetAddress)
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void knxTelegram(KnxTelegram * telegram, bool interesting)
+{
+  // Ignore any telegrams we didn't identify as being interesting
+  if (!interesting)
+    return;
+
+  // Only interested in write telegrams - i.e. a device publishing it's state 
+  if (telegram->getCommand() != KNX_COMMAND_WRITE)
+    return;
+
+  // Only interested in 1-bit (bool) values
+  if (telegram->getPayloadLength() != 2)
+    return;
+
+  // Get the telegram address/value to save looking up for each loop iteration
+  uint16_t targetAddress = telegram->getTargetGroupAddress();
+  bool value = telegram->getBool();
+
+  // Update our internal state for any inputs with this stateAddress
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+  {
+    if (g_knx_config[i].stateAddress == targetAddress)
+    {
+      g_knx_config[i].state = value;
+    }
+  }
+}
+
+void initialiseKnx()
+{
+  // Listen for telegrams addressed to our KNX state addresses 
+  knx.setTelegramCheckCallback(knxTelegramCheck);
+  knx.setKnxTelegramCallback(knxTelegram);
+
+  // Configure the second serial port on the ESP32 for the KNX BCU
   oxrs.println(F("[knx] setting up Serial2 for KNX BCU..."));
   oxrs.print(F(" - baud:   "));
   oxrs.println(KNX_SERIAL_BAUD);
@@ -321,11 +378,11 @@ void initialiseKnxSerial()
 
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 {
-  // Determine the KNX group address to use for this index (if any)...
-  char * commandAddress = g_knx_config[index - 1].commandAddress;
+  // Get the KNX group address configured for this input (if any)...
+  uint16_t commandAddress = g_knx_config[index - 1].commandAddress;
   
   // Ignore if no KNX command address configured  
-  if (strlen(commandAddress) == 0)
+  if (commandAddress == 0)
     return;
 
   // Determine what type of KNX telegram to send...
@@ -335,9 +392,8 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       // Ignore HOLD events and treat all multi-press events as a TOGGLE
       if (state != HOLD_EVENT)
       {
-        // Toggle internal state and send boolean telegram with new state
-        g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-        knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state);
+        // Send boolean telegram with toggled state
+        knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
       }
       break;
     case ROTARY:
@@ -350,9 +406,8 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       break;
     case PRESS:
     case TOGGLE:
-      // Toggle internal state and send boolean telegram with new state
-      g_knx_config[index - 1].state = !g_knx_config[index - 1].state;
-      knx.groupWriteBool(commandAddress, g_knx_config[index - 1].state);
+      // Send boolean telegram with toggled state
+      knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
       break;  
   }
 }
@@ -435,6 +490,40 @@ void setConfigSchema()
   oxrs.setConfigSchema(json.as<JsonVariant>());
 }
 
+uint16_t parseDeviceAddress(const char * address)
+{
+  const char * delimiter = ".";
+
+  char buffer[strlen(address) + 1];
+  strcpy(buffer, address);
+
+  char * token = strtok(buffer, delimiter);
+  int area = atoi(token);
+  token = strtok(NULL, delimiter);
+  int line = atoi(token);
+  token = strtok(NULL, delimiter);
+  int member = atoi(token);
+
+  return KNX_IA(area, line, member);
+}
+
+uint16_t parseGroupAddress(const char * address)
+{
+  const char * delimiter = "/";
+
+  char buffer[strlen(address) + 1];
+  strcpy(buffer, address);
+
+  char * token = strtok(buffer, delimiter);
+  int main = atoi(token);
+  token = strtok(NULL, delimiter);
+  int mid = atoi(token);
+  token = strtok(NULL, delimiter);
+  int sub = atoi(token);
+
+  return KNX_GA(main, mid, sub);
+}
+
 uint8_t getIndex(JsonVariant json)
 {
   if (!json.containsKey("index"))
@@ -486,12 +575,12 @@ void jsonInputConfig(JsonVariant json)
 
   if (json.containsKey("knxCommandAddress"))
   {
-    strcpy(g_knx_config[index - 1].commandAddress, json["knxCommandAddress"]);
+    g_knx_config[index - 1].commandAddress = parseGroupAddress(json["knxCommandAddress"]);
   }
 
   if (json.containsKey("knxStateAddress"))
   {
-    strcpy(g_knx_config[index - 1].stateAddress, json["knxStateAddress"]);
+    g_knx_config[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
   }
 
   if (json.containsKey("knxFailoverOnly"))
@@ -504,20 +593,7 @@ void jsonConfig(JsonVariant json)
 {
   if (json.containsKey("knxDeviceAddress"))
   {
-    const char * knxDeviceAddress = json["knxDeviceAddress"];
-    const char * delimiter = ".";
-
-    char buffer[strlen(knxDeviceAddress) + 1];
-    strcpy(buffer, knxDeviceAddress);
-
-    char * token = strtok(buffer, delimiter);
-    int area = atoi(token);
-    token = strtok(NULL, delimiter);
-    int line = atoi(token);
-    token = strtok(NULL, delimiter);
-    int member = atoi(token);
-
-    knx.setIndividualAddress(area, line, member);
+    knx.setIndividualAddress(parseDeviceAddress(json["knxDeviceAddress"]));
   }
 
   if (json.containsKey("defaultInputType"))
@@ -586,21 +662,23 @@ void jsonCommand(JsonVariant json)
   {
     for (JsonVariant command : json["knxCommands"].as<JsonArray>())
     {
+      uint16_t address = parseGroupAddress(command["knxGroupAddress"]);
+
       if (strcmp(command["knxValue"], "on") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], true);
+        knx.groupWriteBool(address, true);
       }
       else if (strcmp(command["knxValue"], "off") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], false);
+        knx.groupWriteBool(address, false);
       }
       else if (strcmp(command["knxValue"], "up") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], false);
+        knx.groupWriteBool(address, false);
       }
       else if (strcmp(command["knxValue"], "down") == 0)
       {
-        knx.groupWriteBool(command["knxGroupAddress"], true);
+        knx.groupWriteBool(address, true);
       }
     }
   }
@@ -722,8 +800,8 @@ void setup()
   // Speed up I2C clock for faster scan rate (after bus scan)
   Wire.setClock(I2C_CLOCK_SPEED);
 
-  // Set up the KNX serial port
-  initialiseKnxSerial();
+  // Set up KNX callbacks and serial comms to BCU
+  initialiseKnx();
 }
 
 /**
