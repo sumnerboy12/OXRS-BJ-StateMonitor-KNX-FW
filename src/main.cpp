@@ -58,12 +58,19 @@ const uint8_t MAX_INPUT_COUNT       = MCP_COUNT * MCP_PIN_COUNT;
 // Used to store KNX config/state
 struct KNXConfig
 {
+  // config option to only send KNX commands if in failover mode
   bool failoverOnly;
 
+  // address for sending on/off/up/down commands to the KNX actuator
   uint16_t commandAddress;
+  // address for listening for status messages from the KNX actuator
   uint16_t stateAddress;
 
+  // current state of the KNX actuator
   bool state;
+
+  // set to true once we have requested the current value on startup
+  bool stateRead;
 };
 
 /*--------------------------- Global Variables ------------------------*/
@@ -334,8 +341,8 @@ void knxTelegram(KnxTelegram * telegram, bool interesting)
   if (!interesting)
     return;
 
-  // Only interested in write telegrams - i.e. a device publishing it's state 
-  if (telegram->getCommand() != KNX_COMMAND_WRITE)
+  // Only interested in write/response telegrams - i.e. a device publishing state 
+  if (telegram->getCommand() != KNX_COMMAND_WRITE && telegram->getCommand() != KNX_COMMAND_ANSWER)
     return;
 
   // Only interested in 1-bit (bool) values
@@ -374,6 +381,30 @@ void initialiseKnx()
   oxrs.println(KNX_SERIAL_TX);
 
   Serial2.begin(KNX_SERIAL_BAUD, KNX_SERIAL_CONFIG, KNX_SERIAL_RX, KNX_SERIAL_TX);  
+}
+
+void loopKnx()
+{
+  // Check for any events on the KNX bus
+  knx.serialEvent();
+
+  // Check if we have any inputs waiting for state update requests
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+  {
+    // Ignore if we have already sent a read request
+    if (g_knx_config[i].stateRead)
+      continue;
+
+    // If this input has a state address then send the read request
+    if (g_knx_config[i].stateAddress != 0)
+    {
+      knx.groupRead(g_knx_config[i].stateAddress);
+    }
+
+    // Stop after sending a request, the next input will be handled in the next loop
+    g_knx_config[i].stateRead = true;
+    break;
+  }
 }
 
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
@@ -581,6 +612,7 @@ void jsonInputConfig(JsonVariant json)
   if (json.containsKey("knxStateAddress"))
   {
     g_knx_config[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
+    g_knx_config[index - 1].stateRead = false;
   }
 
   if (json.containsKey("knxFailoverOnly"))
@@ -831,5 +863,5 @@ void loop()
   }
 
   // Check for KNX events
-  knx.serialEvent();
+  loopKnx();
 }
