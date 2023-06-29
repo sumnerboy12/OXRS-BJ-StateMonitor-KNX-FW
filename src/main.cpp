@@ -77,6 +77,9 @@ struct KNXConfig
 // Each bit corresponds to an MCP found on the IC2 bus
 uint8_t g_mcps_found = 0;
 
+// Query current value of all bi-stable inputs
+bool g_queryAll = false;
+
 // Force KNX failover flag
 bool g_forceFailover = false;
 
@@ -652,6 +655,11 @@ void setCommandSchema()
   // Define our command schema
   StaticJsonDocument<1024> json;
 
+  JsonObject queryAll = json.createNestedObject("queryAll");
+  queryAll["title"] = "Query Bi-Stable Inputs";
+  queryAll["description"] = "Query and publish the state of all bi-stable inputs.";
+  queryAll["type"] = "boolean";
+
   JsonObject forceFailover = json.createNestedObject("forceFailover");
   forceFailover["title"] = "Force KNX";
   forceFailover["description"] = "By-pass publishing input events to MQTT and always publish to KNX, regardless of IP/MQTT connection state.";
@@ -682,6 +690,11 @@ void setCommandSchema()
 
 void jsonCommand(JsonVariant json)
 {
+  if (json.containsKey("queryAll"))
+  {
+    g_queryAll = json["queryAll"].as<bool>();
+  }
+
   if (json.containsKey("forceFailover"))
   {
     g_forceFailover = json["forceFailover"].as<bool>();
@@ -857,7 +870,16 @@ void loop()
 
     // Check for any input events
     oxrsInput[mcp].process(mcp, io_value);
+
+    // Check if we are querying the current values
+    if (g_queryAll)
+    {
+      oxrsInput[mcp].queryAll(mcp);
+    }
   }
+
+  // Ensure we don't keep querying
+  g_queryAll = false;
 
   // Check for KNX events
   loopKnx();
