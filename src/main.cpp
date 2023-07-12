@@ -203,10 +203,10 @@ void getEventType(char eventType[], uint8_t type, uint8_t state)
       switch (state)
       {
         case LOW_EVENT:
-          sprintf_P(eventType, PSTR("closed"));
+          sprintf_P(eventType, PSTR("open"));
           break;
         case HIGH_EVENT:
-          sprintf_P(eventType, PSTR("open"));
+          sprintf_P(eventType, PSTR("closed"));
           break;
       }
       break;
@@ -227,11 +227,11 @@ void getEventType(char eventType[], uint8_t type, uint8_t state)
     case SECURITY:
       switch (state)
       {
-        case HIGH_EVENT:
-          sprintf_P(eventType, PSTR("normal"));
-          break;
         case LOW_EVENT:
           sprintf_P(eventType, PSTR("alarm"));
+          break;
+        case HIGH_EVENT:
+          sprintf_P(eventType, PSTR("normal"));
           break;
         case TAMPER_EVENT:
           sprintf_P(eventType, PSTR("tamper"));
