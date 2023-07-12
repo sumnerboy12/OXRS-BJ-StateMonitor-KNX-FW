@@ -793,15 +793,24 @@ void publishHassDiscovery(uint8_t mcp)
 
   for (uint8_t pin = 0; pin < MCP_PIN_COUNT; pin++)
   {
+    // Determine the input type
+    uint8_t inputType = oxrsInput[mcp].getType(pin);
+
+    // Only generate config for the last security input
+    if (inputType == SECURITY)
+    {
+      if (++securityCount < 4) 
+        continue;
+      
+      securityCount = 0;
+    }
+
     // Calculate the 1-based input index
     uint8_t input = (MCP_PIN_COUNT * mcp) + pin + 1;
 
     // Ignore if we have already published the discovery config for this input
     if (g_hassDiscoveryPublished[input - 1])
       continue;
-
-    // Determine the input type
-    uint8_t inputType = oxrsInput[mcp].getType(pin);
 
     // Only interested in CONTACT, SECURITY, SWITCH inputs
     switch (inputType)
@@ -811,10 +820,6 @@ void publishHassDiscovery(uint8_t mcp)
         sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'open' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
         break;
       case SECURITY:
-        // Only generate config for the last security input
-        if (++securityCount < 4) continue;
-        securityCount = 0;
-
         sprintf_P(component, PSTR("binary_sensor"));
         sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'alarm' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
         break;
