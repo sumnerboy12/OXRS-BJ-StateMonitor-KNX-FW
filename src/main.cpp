@@ -594,9 +594,8 @@ void jsonInputConfig(JsonVariant json)
     if (inputType != INVALID_INPUT_TYPE)
     {
       setInputType(mcp, pin, inputType);
+      g_hassDiscoveryPublished[index - 1] = false;
     }
-
-    g_hassDiscoveryPublished[index - 1] = false;
   }
   
   if (json.containsKey("invert"))
