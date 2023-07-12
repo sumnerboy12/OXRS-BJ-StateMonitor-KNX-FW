@@ -80,6 +80,9 @@ uint8_t g_mcps_found = 0;
 // Query current value of all bi-stable inputs
 bool g_queryInputs = false;
 
+// Publish Home Assistant self-discovery config for each input
+bool g_hassDiscoveryPublished[MAX_INPUT_COUNT];
+
 // Force KNX failover flag
 bool g_forceFailover = false;
 
@@ -592,16 +595,20 @@ void jsonInputConfig(JsonVariant json)
     {
       setInputType(mcp, pin, inputType);
     }
+
+    g_hassDiscoveryPublished[index - 1] = false;
   }
   
   if (json.containsKey("invert"))
   {
     setInputInvert(mcp, pin, json["invert"].as<bool>());
+    g_hassDiscoveryPublished[index - 1] = false;
   }
 
   if (json.containsKey("disabled"))
   {
     setInputDisabled(mcp, pin, json["disabled"].as<bool>());
+    g_hassDiscoveryPublished[index - 1] = false;
   }
 
   if (json.containsKey("knxCommandAddress"))
@@ -642,7 +649,7 @@ void jsonConfig(JsonVariant json)
   {
     for (JsonVariant input : json["inputs"].as<JsonArray>())
     {
-      jsonInputConfig(input);    
+      jsonInputConfig(input);
     }
   }
 }
@@ -755,6 +762,85 @@ void publishEvent(uint8_t index, uint8_t type, uint8_t state)
   if (failover || !g_knx_config[index - 1].failoverOnly)
   {
     publishKnxEvent(index, type, state);
+  }
+}
+
+bool getHassComponent(char component[], uint8_t inputType)
+{
+  // We only support binary sensors (not push buttons, press, toggle inputs)
+  switch (inputType)
+  {
+    case CONTACT:
+    case SECURITY:
+    case SWITCH:
+      sprintf_P(component, PSTR("binary_sensor"));
+      return true;
+    default:
+      return false;
+  }
+}
+
+void publishHassDiscovery(uint8_t mcp)
+{
+  char component[16];
+  char valueTemplate[128];
+
+  char inputId[16];
+  char inputName[16];
+
+  // Read security sensor values in quads (a full port)
+  uint8_t securityCount = 0;
+
+  for (uint8_t pin = 0; pin < MCP_PIN_COUNT; pin++)
+  {
+    // Calculate the 1-based input index
+    uint8_t input = (MCP_PIN_COUNT * mcp) + pin + 1;
+
+    // Ignore if we have already published the discovery config for this input
+    if (g_hassDiscoveryPublished[input - 1])
+      continue;
+
+    // Determine the input type
+    uint8_t inputType = oxrsInput[mcp].getType(pin);
+
+    // Only interested in CONTACT, SECURITY, SWITCH inputs
+    switch (inputType)
+    {
+      case CONTACT:
+        sprintf_P(component, PSTR("binary_sensor"));
+        sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'open' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
+        break;
+      case SECURITY:
+        // Only generate config for the last security input
+        if (++securityCount < 4) continue;
+        securityCount = 0;
+
+        sprintf_P(component, PSTR("binary_sensor"));
+        sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'alarm' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
+        break;
+      case SWITCH:
+        sprintf_P(component, PSTR("binary_sensor"));
+        sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'on' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
+        break;
+      default:
+        continue;
+    }
+
+    // JSON config payload (empty if the input is disabled, to clear any existing config)
+    DynamicJsonDocument json(1024);
+
+    sprintf_P(inputId, PSTR("input_%d"), input);
+    sprintf_P(inputName, PSTR("Input %d"), input);
+
+    // Check if this input is disabled
+    if (!oxrsInput[mcp].getDisabled(pin))
+    {
+      oxrs.getHassDiscoveryJson(json, inputId, inputName);
+      json["val_tpl"] = valueTemplate;
+    }
+
+    // Publish retained and stop trying once successful 
+    g_hassDiscoveryPublished[input - 1] = oxrs.publishHassDiscovery(json, component, inputId);
   }
 }
 
@@ -875,6 +961,12 @@ void loop()
     if (g_queryInputs)
     {
       oxrsInput[mcp].queryAll(mcp);
+    }
+
+    // Check if we need to publish any Home Assistant discovery payloads
+    if (oxrs.isHassDiscoveryEnabled())
+    {
+      publishHassDiscovery(mcp);
     }
   }
 
