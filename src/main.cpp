@@ -764,28 +764,14 @@ void publishEvent(uint8_t index, uint8_t type, uint8_t state)
   }
 }
 
-bool getHassComponent(char component[], uint8_t inputType)
-{
-  // We only support binary sensors (not push buttons, press, toggle inputs)
-  switch (inputType)
-  {
-    case CONTACT:
-    case SECURITY:
-    case SWITCH:
-      sprintf_P(component, PSTR("binary_sensor"));
-      return true;
-    default:
-      return false;
-  }
-}
-
 void publishHassDiscovery(uint8_t mcp)
 {
   char component[16];
-  char valueTemplate[128];
+  sprintf_P(component, PSTR("binary_sensor"));
 
   char inputId[16];
   char inputName[16];
+  char valueTemplate[128];
 
   // Read security sensor values in quads (a full port)
   uint8_t securityCount = 0;
@@ -812,35 +798,37 @@ void publishHassDiscovery(uint8_t mcp)
       continue;
 
     // Only interested in CONTACT, SECURITY, SWITCH inputs
-    switch (inputType)
-    {
-      case CONTACT:
-        sprintf_P(component, PSTR("binary_sensor"));
-        sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'open' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-        break;
-      case SECURITY:
-        sprintf_P(component, PSTR("binary_sensor"));
-        sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'alarm' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-        break;
-      case SWITCH:
-        sprintf_P(component, PSTR("binary_sensor"));
-        sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'on' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-        break;
-      default:
-        continue;
-    }
+    if (inputType != CONTACT && inputType != SECURITY && inputType != SWITCH)
+      continue;
 
     // JSON config payload (empty if the input is disabled, to clear any existing config)
     DynamicJsonDocument json(1024);
 
     sprintf_P(inputId, PSTR("input_%d"), input);
-    sprintf_P(inputName, PSTR("Input %d"), input);
 
     // Check if this input is disabled
     if (!oxrsInput[mcp].getDisabled(pin))
     {
-      oxrs.getHassDiscoveryJson(json, inputId, inputName);
-      json["val_tpl"] = valueTemplate;
+      oxrs.getHassDiscoveryJson(json, inputId);
+
+      sprintf_P(inputName, PSTR("Input %d"), input);
+      json["name"] = inputName;
+
+      switch (inputType)
+      {
+        case CONTACT:
+          sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'open' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
+          json["val_tpl"] = valueTemplate;
+          break;
+        case SECURITY:
+          sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'alarm' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
+          json["val_tpl"] = valueTemplate;
+          break;
+        case SWITCH:
+          sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'on' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
+          json["val_tpl"] = valueTemplate;
+          break;
+      }
     }
 
     // Publish retained and stop trying once successful 
