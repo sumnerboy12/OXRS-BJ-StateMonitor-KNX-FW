@@ -817,7 +817,6 @@ void publishHassDiscovery(uint8_t mcp)
       json["name"] = inputName;
 
       json["stat_t"] = oxrs.getMQTT()->getStatusTopic(statusTopic);
-
       switch (inputType)
       {
         case CONTACT:
