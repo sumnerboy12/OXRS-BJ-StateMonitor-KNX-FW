@@ -268,10 +268,10 @@ void setInputType(uint8_t mcp, uint8_t pin, uint8_t inputType)
   switch (inputType)
   {
     case SECURITY:
-      oxrs.setDisplayPinType(mcp, pin, PIN_TYPE_SECURITY);
+      oxrs.getLCD()->setPinType(mcp, pin, PIN_TYPE_SECURITY);
       break;
     default:
-      oxrs.setDisplayPinType(mcp, pin, PIN_TYPE_DEFAULT);
+      oxrs.getLCD()->setPinType(mcp, pin, PIN_TYPE_DEFAULT);
       break;
   }
   #endif
@@ -284,7 +284,7 @@ void setInputInvert(uint8_t mcp, uint8_t pin, int invert)
 {
   // Configure the display
   #if defined(OXRS_RACK32)
-  oxrs.setDisplayPinInvert(mcp, pin, invert);
+  oxrs.getLCD()->setPinInvert(mcp, pin, invert);
   #endif
 
   // Pass this update to the input handler
@@ -295,7 +295,7 @@ void setInputDisabled(uint8_t mcp, uint8_t pin, int disabled)
 {
   // Configure the display
   #if defined(OXRS_RACK32)
-  oxrs.setDisplayPinDisabled(mcp, pin, disabled);
+  oxrs.getLCD()->setPinDisabled(mcp, pin, disabled);
   #endif
 
   // Pass this update to the input handler
@@ -771,6 +771,8 @@ void publishHassDiscovery(uint8_t mcp)
 
   char inputId[16];
   char inputName[16];
+
+  char statusTopic[64];
   char valueTemplate[128];
 
   // Read security sensor values in quads (a full port)
@@ -812,23 +814,22 @@ void publishHassDiscovery(uint8_t mcp)
       oxrs.getHassDiscoveryJson(json, inputId);
 
       sprintf_P(inputName, PSTR("Input %d"), input);
-      json["name"] = inputName;
-
       switch (inputType)
       {
         case CONTACT:
           sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'open' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-          json["val_tpl"] = valueTemplate;
           break;
         case SECURITY:
           sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'alarm' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-          json["val_tpl"] = valueTemplate;
           break;
         case SWITCH:
           sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'on' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-          json["val_tpl"] = valueTemplate;
           break;
       }
+
+      json["name"] = inputName;
+      json["stat_t"] = oxrs.getMQTT()->getStatusTopic(statusTopic);
+      json["val_tpl"] = valueTemplate;
     }
 
     // Publish retained and stop trying once successful 
@@ -910,7 +911,7 @@ void setup()
 
   // Set up port display
   #if defined(OXRS_RACK32)
-  oxrs.setDisplayPortLayout(g_mcps_found, PORT_LAYOUT_INPUT_AUTO);
+  oxrs.getLCD()->drawPorts(PORT_LAYOUT_INPUT_AUTO, g_mcps_found);
   #endif
 
   // Set up config/command schemas (for self-discovery and adoption)
@@ -943,7 +944,7 @@ void loop()
 
     // Show port animations
     #if defined(OXRS_RACK32)
-    oxrs.updateDisplayPorts(mcp, io_value);
+    oxrs.getLCD()->process(mcp, io_value);
     #endif
 
     // Check for any input events
