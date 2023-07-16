@@ -814,24 +814,22 @@ void publishHassDiscovery(uint8_t mcp)
       oxrs.getHassDiscoveryJson(json, inputId);
 
       sprintf_P(inputName, PSTR("Input %d"), input);
-      json["name"] = inputName;
-
-      json["stat_t"] = oxrs.getMQTT()->getStatusTopic(statusTopic);
       switch (inputType)
       {
         case CONTACT:
           sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'open' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-          json["val_tpl"] = valueTemplate;
           break;
         case SECURITY:
           sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'alarm' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-          json["val_tpl"] = valueTemplate;
           break;
         case SWITCH:
           sprintf_P(valueTemplate, PSTR("{%% if value_json.index == %d %%}{%% if value_json.event == 'on' %%}ON{%% else %%}OFF{%% endif %%}{%% endif %%}"), input);
-          json["val_tpl"] = valueTemplate;
           break;
       }
+
+      json["name"] = inputName;
+      json["stat_t"] = oxrs.getMQTT()->getStatusTopic(statusTopic);
+      json["val_tpl"] = valueTemplate;
     }
 
     // Publish retained and stop trying once successful 
