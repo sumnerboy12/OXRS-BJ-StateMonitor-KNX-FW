@@ -17,6 +17,7 @@
 #include <Arduino.h>
 #include <Adafruit_MCP23X17.h>        // For MCP23017 I/O buffers
 #include <OXRS_Input.h>               // For input handling
+#include <OXRS_HASS.h>                // For Home Assistant self-discovery
 #include <KnxTpUart.h>                // For KNX BCU
 
 #if defined(OXRS_RACK32)
@@ -95,6 +96,9 @@ Adafruit_MCP23X17 mcp23017[MCP_COUNT];
 
 // Input handlers
 OXRS_Input oxrsInput[MCP_COUNT];
+
+// Home Assistant self-discovery
+OXRS_HASS hass(oxrs.getMQTT());
 
 // KNX BCU on Serial2
 KnxTpUart knx(&Serial2, KNX_DEFAULT_ADDRESS);
@@ -520,6 +524,9 @@ void setConfigSchema()
   JsonArray required = items.createNestedArray("required");
   required.add("index");
 
+  // Add any Home Assistant config
+  hass.setConfigSchema(json);
+
   // Pass our config schema down to the hardware library
   oxrs.setConfigSchema(json.as<JsonVariant>());
 }
@@ -651,6 +658,9 @@ void jsonConfig(JsonVariant json)
       jsonInputConfig(input);
     }
   }
+
+  // Handle any Home Assistant config
+  hass.parseConfig(json);
 }
 
 /**
@@ -811,7 +821,7 @@ void publishHassDiscovery(uint8_t mcp)
     // Check if this input is disabled
     if (!oxrsInput[mcp].getDisabled(pin))
     {
-      oxrs.getHassDiscoveryJson(json, inputId);
+      hass.getDiscoveryJson(json, inputId);
 
       sprintf_P(inputName, PSTR("Input %d"), input);
       switch (inputType)
@@ -833,7 +843,7 @@ void publishHassDiscovery(uint8_t mcp)
     }
 
     // Publish retained and stop trying once successful 
-    g_hassDiscoveryPublished[input - 1] = oxrs.publishHassDiscovery(json, component, inputId);
+    g_hassDiscoveryPublished[input - 1] = hass.publishDiscoveryJson(json, component, inputId);
   }
 }
 
@@ -957,7 +967,7 @@ void loop()
     }
 
     // Check if we need to publish any Home Assistant discovery payloads
-    if (oxrs.isHassDiscoveryEnabled())
+    if (hass.isDiscoveryEnabled())
     {
       publishHassDiscovery(mcp);
     }
