@@ -427,10 +427,9 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
   switch (type)
   {
     case BUTTON:
-      // Ignore HOLD events and treat all multi-press events as a TOGGLE
-      if (state != HOLD_EVENT)
+      // Only handle single-press events, treat as TOGGLE
+      if (state == 1)
       {
-        // Send boolean telegram with toggled state
         knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
       }
       break;
