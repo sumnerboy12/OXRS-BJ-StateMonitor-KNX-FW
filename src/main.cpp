@@ -468,7 +468,7 @@ void createKnxValueEnum(JsonObject parent)
 void setConfigSchema()
 {
   // Define our config schema
-  StaticJsonDocument<1024> json;
+  StaticJsonDocument<2048> json;
 
   JsonObject knxDeviceAddress = json.createNestedObject("knxDeviceAddress");
   knxDeviceAddress["title"] = "KNX Device Address";
