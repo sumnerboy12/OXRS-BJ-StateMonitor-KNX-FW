@@ -119,7 +119,7 @@ uint8_t getMaxIndex()
 
 void createInputTypeEnum(JsonObject parent)
 {
-  JsonArray typeEnum = parent.createNestedArray("enum");
+  JsonArray typeEnum = parent["enum"].to<JsonArray>();
   
   typeEnum.add("button");
   typeEnum.add("contact");
@@ -454,7 +454,7 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 
 void createKnxValueEnum(JsonObject parent)
 {
-  JsonArray valueEnum = parent.createNestedArray("enum");
+  JsonArray valueEnum = parent["enum"].to<JsonArray>();
   
   valueEnum.add("on");
   valueEnum.add("off");
@@ -468,62 +468,62 @@ void createKnxValueEnum(JsonObject parent)
 void setConfigSchema()
 {
   // Define our config schema
-  StaticJsonDocument<2048> json;
+  JsonDocument json;
 
-  JsonObject knxDeviceAddress = json.createNestedObject("knxDeviceAddress");
+  JsonObject knxDeviceAddress = json["knxDeviceAddress"].to<JsonObject>();
   knxDeviceAddress["title"] = "KNX Device Address";
   knxDeviceAddress["description"] = "The physical address of this device on the KNX bus. Defaults to 1.1.244.";
   knxDeviceAddress["type"] = "string";
   knxDeviceAddress["pattern"] = "^\\d+\\.\\d+\\.\\d+$";
 
-  JsonObject defaultInputType = json.createNestedObject("defaultInputType");
+  JsonObject defaultInputType = json["defaultInputType"].to<JsonObject>();
   defaultInputType["title"] = "Default Input Type";
   defaultInputType["description"] = "Set the default input type for anything without explicit configuration below. Defaults to ‘switch’.";
   createInputTypeEnum(defaultInputType);
 
-  JsonObject inputs = json.createNestedObject("inputs");
+  JsonObject inputs = json["inputs"].to<JsonObject>();
   inputs["title"] = "Input Configuration";
   inputs["description"] = "Add configuration for each input in use on your device. The 1-based index specifies which input you wish to configure. The type defines how an input is monitored and what events are emitted. The KNX group addresses must be in standard 3-level format, e.g. 1/2/3.";
   inputs["type"] = "array";
   
-  JsonObject items = inputs.createNestedObject("items");
+  JsonObject items = inputs["items"].to<JsonObject>();
   items["type"] = "object";
 
-  JsonObject properties = items.createNestedObject("properties");
+  JsonObject properties = items["properties"].to<JsonObject>();
 
-  JsonObject index = properties.createNestedObject("index");
+  JsonObject index = properties["index"].to<JsonObject>();
   index["title"] = "Index";
   index["type"] = "integer";
   index["minimum"] = 1;
   index["maximum"] = getMaxIndex();
 
-  JsonObject type = properties.createNestedObject("type");
+  JsonObject type = properties["type"].to<JsonObject>();
   type["title"] = "Type";
   createInputTypeEnum(type);
 
-  JsonObject invert = properties.createNestedObject("invert");
+  JsonObject invert = properties["invert"].to<JsonObject>();
   invert["title"] = "Invert";
   invert["type"] = "boolean";
 
-  JsonObject disabled = properties.createNestedObject("disabled");
+  JsonObject disabled = properties["disabled"].to<JsonObject>();
   disabled["title"] = "Disabled";
   disabled["type"] = "boolean";
 
-  JsonObject knxCommandAddress = properties.createNestedObject("knxCommandAddress");
+  JsonObject knxCommandAddress = properties["knxCommandAddress"].to<JsonObject>();
   knxCommandAddress["title"] = "KNX Command Address";
   knxCommandAddress["type"] = "string";
   knxCommandAddress["pattern"] = "^\\d+\\/\\d+\\/\\d+$";
 
-  JsonObject knxStateAddress = properties.createNestedObject("knxStateAddress");
+  JsonObject knxStateAddress = properties["knxStateAddress"].to<JsonObject>();
   knxStateAddress["title"] = "KNX State Address";
   knxStateAddress["type"] = "string";
   knxStateAddress["pattern"] = "^\\d+\\/\\d+\\/\\d+$";
 
-  JsonObject knxFailoverOnly = properties.createNestedObject("knxFailoverOnly");
+  JsonObject knxFailoverOnly = properties["knxFailoverOnly"].to<JsonObject>();
   knxFailoverOnly["title"] = "KNX Failover Only";
   knxFailoverOnly["type"] = "boolean";
 
-  JsonArray required = items.createNestedArray("required");
+  JsonArray required = items["required"].to<JsonArray>();
   required.add("index");
 
   // Add any Home Assistant config
@@ -671,34 +671,34 @@ void jsonConfig(JsonVariant json)
 void setCommandSchema()
 {
   // Define our command schema
-  StaticJsonDocument<1024> json;
+  JsonDocument json;
 
-  JsonObject queryInputs = json.createNestedObject("queryInputs");
+  JsonObject queryInputs = json["queryInputs"].to<JsonObject>();
   queryInputs["title"] = "Query Inputs";
   queryInputs["description"] = "Query and publish the state of all bi-stable inputs.";
   queryInputs["type"] = "boolean";
 
-  JsonObject forceFailover = json.createNestedObject("forceFailover");
+  JsonObject forceFailover = json["forceFailover"].to<JsonObject>();
   forceFailover["title"] = "Force KNX";
   forceFailover["description"] = "By-pass publishing input events to MQTT and always publish to KNX, regardless of IP/MQTT connection state.";
   forceFailover["type"] = "boolean";
 
-  JsonObject knxCommands = json.createNestedObject("knxCommands");
+  JsonObject knxCommands = json["knxCommands"].to<JsonObject>();
   knxCommands["title"] = "KNX Commands";
   knxCommands["description"] = "Send one or more telegrams directly onto the KNX bus.";
   knxCommands["type"] = "array";
   
-  JsonObject knxCommandItems = knxCommands.createNestedObject("items");
+  JsonObject knxCommandItems = knxCommands["items"].to<JsonObject>();
   knxCommandItems["type"] = "object";
 
-  JsonObject knxCommandProperties = knxCommandItems.createNestedObject("properties");
+  JsonObject knxCommandProperties = knxCommandItems["properties"].to<JsonObject>();
 
-  JsonObject knxGroupAddress = knxCommandProperties.createNestedObject("knxGroupAddress");
+  JsonObject knxGroupAddress = knxCommandProperties["knxGroupAddress"].to<JsonObject>();
   knxGroupAddress["title"] = "KNX Group Address";
   knxGroupAddress["type"] = "string";
   knxGroupAddress["pattern"] = "^\\d+\\/\\d+\\/\\d+$";
 
-  JsonObject knxValue = knxCommandProperties.createNestedObject("knxValue");
+  JsonObject knxValue = knxCommandProperties["knxValue"].to<JsonObject>();
   knxValue["title"] = "KNX Value";
   createKnxValueEnum(knxValue);
 
@@ -755,7 +755,7 @@ void publishEvent(uint8_t index, uint8_t type, uint8_t state)
   char eventType[8];
   getEventType(eventType, type, state);
 
-  StaticJsonDocument<128> json;
+  JsonDocument json;
   json["port"] = port;
   json["channel"] = channel;
   json["index"] = index;
@@ -816,7 +816,7 @@ void publishHassDiscovery(uint8_t mcp)
       continue;
 
     // JSON config payload (empty if the input is disabled, to clear any existing config)
-    DynamicJsonDocument json(1024);
+    JsonDocument json;
 
     sprintf_P(inputId, PSTR("input_%d"), input);
 
