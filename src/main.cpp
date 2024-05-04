@@ -23,6 +23,9 @@
 #if defined(OXRS_RACK32)
 #include <OXRS_Rack32.h>              // Rack32 support
 OXRS_Rack32 oxrs;
+#elif defined(OXRS_BLACK)
+#include <OXRS_Black.h>               // Black support
+OXRS_Black oxrs;
 #endif
 
 /*--------------------------- Constants -------------------------------*/
@@ -271,7 +274,7 @@ void getEventType(char eventType[], uint8_t type, uint8_t state)
 void setInputType(uint8_t mcp, uint8_t pin, uint8_t inputType)
 {
   // Configure the display (type constant from LCD library)
-  #if defined(OXRS_RACK32)
+  #if defined(OXRS_LCD_ENABLE)
   switch (inputType)
   {
     case SECURITY:
@@ -290,7 +293,7 @@ void setInputType(uint8_t mcp, uint8_t pin, uint8_t inputType)
 void setInputInvert(uint8_t mcp, uint8_t pin, int invert)
 {
   // Configure the display
-  #if defined(OXRS_RACK32)
+  #if defined(OXRS_LCD_ENABLE)
   oxrs.getLCD()->setPinInvert(mcp, pin, invert);
   #endif
 
@@ -301,7 +304,7 @@ void setInputInvert(uint8_t mcp, uint8_t pin, int invert)
 void setInputDisabled(uint8_t mcp, uint8_t pin, int disabled)
 {
   // Configure the display
-  #if defined(OXRS_RACK32)
+  #if defined(OXRS_LCD_ENABLE)
   oxrs.getLCD()->setPinDisabled(mcp, pin, disabled);
   #endif
 
@@ -922,7 +925,7 @@ void setup()
   oxrs.begin(jsonConfig, jsonCommand);
 
   // Set up port display
-  #if defined(OXRS_RACK32)
+  #if defined(OXRS_LCD_ENABLE)
   oxrs.getLCD()->drawPorts(PORT_LAYOUT_INPUT_AUTO, g_mcps_found);
   #endif
 
@@ -955,7 +958,7 @@ void loop()
     uint16_t io_value = mcp23017[mcp].readGPIOAB();
 
     // Show port animations
-    #if defined(OXRS_RACK32)
+    #if defined(OXRS_LCD_ENABLE)
     oxrs.getLCD()->process(mcp, io_value);
     #endif
 
