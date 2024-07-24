@@ -22,10 +22,14 @@
 
 #if defined(OXRS_RACK32)
 #include <OXRS_Rack32.h>              // Rack32 support
-OXRS_Rack32 oxrs;
+OXRS_Rack32   oxrs;
+#define       KNX_SERIAL_RX         16
+#define       KNX_SERIAL_TX         17
 #elif defined(OXRS_BLACK)
 #include <OXRS_Black.h>               // Black support
-OXRS_Black oxrs;
+OXRS_Black    oxrs;
+#define       KNX_SERIAL_RX         17
+#define       KNX_SERIAL_TX         16
 #endif
 
 /*--------------------------- Constants -------------------------------*/
@@ -52,8 +56,6 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       KNX_DEFAULT_ADDRESS   KNX_IA(1, 1, 244)
 #define       KNX_SERIAL_BAUD       19200
 #define       KNX_SERIAL_CONFIG     SERIAL_8E1
-#define       KNX_SERIAL_RX         16
-#define       KNX_SERIAL_TX         17
 
 // Max number of supported inputs
 const uint8_t MAX_INPUT_COUNT       = MCP_COUNT * MCP_PIN_COUNT;
