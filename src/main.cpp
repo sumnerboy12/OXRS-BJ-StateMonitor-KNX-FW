@@ -443,8 +443,13 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       // Send relative inc/dec dimming telegram (no internal state needed)
       knx.groupWrite4BitDim(commandAddress, state == LOW_EVENT, 5);
       break;
+    case CONTACT:
+    case SECURITY:
     case SWITCH:
       // Send boolean telegram (no internal state needed)
+      // CONTACT:   LOW_EVENT => open
+      // SECURITY:  LOW_EVENT => alarm  <-- what about TAMPER, FAULT, SHORT?
+      // SWITCH:    LOW_EVENT => on
       knx.groupWriteBool(commandAddress, state == LOW_EVENT);
       break;
     case PRESS:
