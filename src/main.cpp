@@ -737,11 +737,11 @@ void jsonCommand(JsonVariant json)
       }
       else if (strcmp(command["knxValue"], "up") == 0)
       {
-        knx.groupWriteBool(address, false);
+        knx.groupWrite4BitDim(address, true, 5);
       }
       else if (strcmp(command["knxValue"], "down") == 0)
       {
-        knx.groupWriteBool(address, true);
+        knx.groupWrite4BitDim(address, false, 5);
       }
     }
   }
