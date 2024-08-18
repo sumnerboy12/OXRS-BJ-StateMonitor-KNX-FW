@@ -55,12 +55,19 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       KNX_SERIAL_RX         16
 #define       KNX_SERIAL_TX         17
 
+#define       KNX_RESET_TIMEOUT_MS  5000        // 5 seconds
+#define       KNX_READ_TIMEOUT_MS   5000        // 5 seconds
+#define       KNX_STATE_EXPIRY_MS   3600000     // 1 hour
+
 // Max number of supported inputs
 const uint8_t MAX_INPUT_COUNT       = MCP_COUNT * MCP_PIN_COUNT;
 
+// KNX read queue size
+const uint8_t KNX_READ_QUEUE_SIZE   = MAX_INPUT_COUNT;
+
 /*-------------------------- Internal datatypes --------------------------*/
 // Used to store KNX config/state
-struct KNXConfig
+struct KnxConfig
 {
   // config option to only send KNX commands if in failover mode
   bool failoverOnly;
@@ -73,8 +80,8 @@ struct KNXConfig
   // current state of the KNX actuator
   bool state;
 
-  // set to true to trigger a GroupRead request
-  bool stateRead;
+  // last time a state update was received
+  uint32_t lastStateUpdateMs;
 };
 
 /*--------------------------- Global Variables ------------------------*/
@@ -91,7 +98,15 @@ bool g_hassDiscoveryPublished[MAX_INPUT_COUNT];
 bool g_forceFailover = false;
 
 // KNX config for every input
-KNXConfig g_knx_config[MAX_INPUT_COUNT];
+KnxConfig g_knxConfig[MAX_INPUT_COUNT];
+
+// A queue for controlling group read requests for KNX state updates
+uint16_t g_knxReadQueue[KNX_READ_QUEUE_SIZE];
+uint8_t  g_knxReadQueueHeadIdx = 0;
+uint8_t  g_knxReadQueueTailIdx = 0;
+
+uint16_t g_knxReadWaitAddress = 0;
+uint32_t g_knxReadWaitSince = 0;
 
 /*--------------------------- Instantiate Globals ---------------------*/
 // I/O buffers
@@ -342,7 +357,7 @@ bool knxTelegramCheck(KnxTelegram * telegram)
   // Ensure we show interest where required, so an ACK can be sent 
   for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
   {
-    if (g_knx_config[i].stateAddress == targetAddress)
+    if (g_knxConfig[i].stateAddress == targetAddress)
     {
       return true;
     }
@@ -372,11 +387,108 @@ void knxTelegram(KnxTelegram * telegram, bool interesting)
   // Update our internal state for any inputs with this stateAddress
   for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
   {
-    if (g_knx_config[i].stateAddress == targetAddress)
+    if (g_knxConfig[i].stateAddress == targetAddress)
     {
-      g_knx_config[i].state = value;
+      g_knxConfig[i].state = value;
+      g_knxConfig[i].lastStateUpdateMs = millis();
     }
   }
+
+  // If this was the address we were waiting on, then clear so we can move onto
+  // the next item in the queue
+  if (g_knxReadWaitAddress == targetAddress)
+  {
+    g_knxReadWaitAddress = 0;
+    g_knxReadWaitSince = 0;
+  }
+}
+
+bool isQueueEmpty()
+{
+  return g_knxReadQueueHeadIdx == g_knxReadQueueTailIdx;
+}
+
+bool isQueued(uint16_t address)
+{
+  if (isQueueEmpty())
+    return false;
+
+  // Check if the queue has wrapped (i.e. the head is before the tail)
+  if (g_knxReadQueueTailIdx < g_knxReadQueueHeadIdx)
+  {
+    // Check from the tail to the head
+    for (uint16_t i = g_knxReadQueueTailIdx; i < g_knxReadQueueHeadIdx; i++)
+    {
+      if (g_knxReadQueue[i] == address)
+        return true;
+    }
+  }
+  else
+  {
+    // Check from the tail to the end of the queue
+    for (uint16_t i = g_knxReadQueueTailIdx; i < KNX_READ_QUEUE_SIZE; i++)
+    {
+      if (g_knxReadQueue[i] == address)
+        return true;
+    }
+
+    // Check from the start of the queue to the head
+    for (uint16_t i = 0; i < g_knxReadQueueHeadIdx; i++)
+    {
+      if (g_knxReadQueue[i] == address)
+        return true;
+    }
+  }
+
+  return false;
+}
+
+void flushQueue()
+{
+  // Clear the queue
+  g_knxReadQueueHeadIdx = 0;
+  g_knxReadQueueTailIdx = 0;
+
+  // Clear the timeout timer
+  g_knxReadWaitAddress = 0;
+  g_knxReadWaitSince = 0;
+}
+
+void pushQueue(uint16_t address)
+{
+  if (address == 0)
+    return;
+
+  if (isQueued(address))
+    return;
+
+  // Insert at the head of the queue
+  g_knxReadQueue[g_knxReadQueueHeadIdx] = address;
+
+  // Increment the head and if we reach the end circle back to the start
+  g_knxReadQueueHeadIdx++;
+  if (g_knxReadQueueHeadIdx == KNX_READ_QUEUE_SIZE)
+  {
+    g_knxReadQueueHeadIdx = 0;
+  }
+}
+
+uint16_t popQueue()
+{
+  if (isQueueEmpty())
+    return 0;
+  
+  // Retrieve from the tail of the queue
+  uint16_t address = g_knxReadQueue[g_knxReadQueueTailIdx];
+
+  // Increment the tail and if we reach the end circle back to the start
+  g_knxReadQueueTailIdx++;
+  if (g_knxReadQueueTailIdx == KNX_READ_QUEUE_SIZE)
+  {
+    g_knxReadQueueTailIdx = 0;
+  }
+
+  return address;
 }
 
 void initialiseKnx()
@@ -396,7 +508,19 @@ void initialiseKnx()
   oxrs.print(F(" - tx pin: "));
   oxrs.println(KNX_SERIAL_TX);
 
-  Serial2.begin(KNX_SERIAL_BAUD, KNX_SERIAL_CONFIG, KNX_SERIAL_RX, KNX_SERIAL_TX);  
+  Serial2.begin(KNX_SERIAL_BAUD, KNX_SERIAL_CONFIG, KNX_SERIAL_RX, KNX_SERIAL_TX);
+
+  // Reset the UART connection on startup
+  if (knx.uartReset(KNX_RESET_TIMEOUT_MS))
+  {
+    oxrs.println(F("[knx] UART reset OK"));
+  }
+  else
+  {
+    oxrs.print(F("[knx] UART reset timed out after "));
+    oxrs.print(KNX_RESET_TIMEOUT_MS);
+    oxrs.println(F("ms"));
+  }
 }
 
 void loopKnx()
@@ -404,26 +528,51 @@ void loopKnx()
   // Check for any events on the KNX bus
   knx.serialEvent();
 
-  // Check if we have any inputs waiting for GroupRead requests (one per loop)
-  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+  // Are we waiting on a read response?
+  if (g_knxReadWaitAddress == 0)
   {
-    if (!g_knx_config[i].stateRead)
-      continue;
-
-    if (g_knx_config[i].stateAddress != 0)
+    // If we are not waiting then check the queue
+    uint16_t address = popQueue();
+    if (address != 0)
     {
-      knx.groupRead(g_knx_config[i].stateAddress);
-    }
+      // Something was on the queue so send a read request
+      knx.groupRead(address);
 
-    g_knx_config[i].stateRead = false;
-    break;
+      // Start the timeout timer
+      g_knxReadWaitAddress = address;
+      g_knxReadWaitSince = millis();
+    }
+    else
+    {
+      // Queue is empty so check if there are any addresses that have expired state
+      for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+      {
+        if ((millis() - g_knxConfig[i].lastStateUpdateMs) > KNX_STATE_EXPIRY_MS)
+        {
+          pushQueue(g_knxConfig[i].stateAddress);
+        }
+      }
+    }
+  }
+  else
+  {
+    // If we have timed out waiting for a response then re-queue and continue
+    if ((millis() - g_knxReadWaitSince) > KNX_READ_TIMEOUT_MS)
+    {
+      // Push this address back onto the queue
+      pushQueue(g_knxReadWaitAddress);
+      
+      // Clear the timeout timer
+      g_knxReadWaitAddress = 0;
+      g_knxReadWaitSince = 0;
+    }
   }
 }
 
 void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
 {
   // Get the KNX group address configured for this input (if any)...
-  uint16_t commandAddress = g_knx_config[index - 1].commandAddress;
+  uint16_t commandAddress = g_knxConfig[index - 1].commandAddress;
   
   // Ignore if no KNX command address configured  
   if (commandAddress == 0)
@@ -436,7 +585,7 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
       // Only handle single-press events, treat as TOGGLE
       if (state == 1)
       {
-        knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
+        knx.groupWriteBool(commandAddress, !g_knxConfig[index - 1].state);
       }
       break;
     case ROTARY:
@@ -455,7 +604,7 @@ void publishKnxEvent(uint8_t index, uint8_t type, uint8_t state)
     case PRESS:
     case TOGGLE:
       // Send boolean telegram with toggled state
-      knx.groupWriteBool(commandAddress, !g_knx_config[index - 1].state);
+      knx.groupWriteBool(commandAddress, !g_knxConfig[index - 1].state);
       break;  
   }
 }
@@ -629,18 +778,18 @@ void jsonInputConfig(JsonVariant json)
 
   if (json.containsKey("knxCommandAddress"))
   {
-    g_knx_config[index - 1].commandAddress = parseGroupAddress(json["knxCommandAddress"]);
+    g_knxConfig[index - 1].commandAddress = parseGroupAddress(json["knxCommandAddress"]);
   }
 
   if (json.containsKey("knxStateAddress"))
   {
-    g_knx_config[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
-    g_knx_config[index - 1].stateRead = true;
+    g_knxConfig[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
+    pushQueue(g_knxConfig[index - 1].stateAddress);
   }
 
   if (json.containsKey("knxFailoverOnly"))
   {
-    g_knx_config[index - 1].failoverOnly = json["knxFailoverOnly"].as<bool>();
+    g_knxConfig[index - 1].failoverOnly = json["knxFailoverOnly"].as<bool>();
   }
 }
 
@@ -663,6 +812,9 @@ void jsonConfig(JsonVariant json)
 
   if (json.containsKey("inputs"))
   {
+    // Flush the KNX read queue before loading any input configuration
+    flushQueue();
+
     for (JsonVariant input : json["inputs"].as<JsonArray>())
     {
       jsonInputConfig(input);
@@ -778,7 +930,7 @@ void publishEvent(uint8_t index, uint8_t type, uint8_t state)
   }
 
   // Always publish this event to KNX, unless not in failover and failover-only enabled
-  if (failover || !g_knx_config[index - 1].failoverOnly)
+  if (failover || !g_knxConfig[index - 1].failoverOnly)
   {
     publishKnxEvent(index, type, state);
   }
