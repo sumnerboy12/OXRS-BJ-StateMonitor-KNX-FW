@@ -55,6 +55,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       KNX_SERIAL_RX         16
 #define       KNX_SERIAL_TX         17
 
+#define       KNX_RESET_TIMEOUT_MS  5000        // 5 seconds
 #define       KNX_READ_TIMEOUT_MS   5000        // 5 seconds
 #define       KNX_STATE_EXPIRY_MS   3600000     // 1 hour
 
@@ -507,7 +508,19 @@ void initialiseKnx()
   oxrs.print(F(" - tx pin: "));
   oxrs.println(KNX_SERIAL_TX);
 
-  Serial2.begin(KNX_SERIAL_BAUD, KNX_SERIAL_CONFIG, KNX_SERIAL_RX, KNX_SERIAL_TX);  
+  Serial2.begin(KNX_SERIAL_BAUD, KNX_SERIAL_CONFIG, KNX_SERIAL_RX, KNX_SERIAL_TX);
+
+  // Reset the UART connection on startup
+  if (knx.uartReset(KNX_RESET_TIMEOUT_MS))
+  {
+    oxrs.println(F("[knx] UART reset OK"));
+  }
+  else
+  {
+    oxrs.print(F("[knx] UART reset timed out after "));
+    oxrs.print(KNX_RESET_TIMEOUT_MS);
+    oxrs.println(F("ms"));
+  }
 }
 
 void loopKnx()
