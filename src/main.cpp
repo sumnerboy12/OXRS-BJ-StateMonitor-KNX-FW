@@ -57,7 +57,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 
 #define       KNX_RESET_TIMEOUT_MS  5000        // 5 seconds
 #define       KNX_READ_TIMEOUT_MS   5000        // 5 seconds
-#define       KNX_STATE_EXPIRY_MS   3600000     // 1 hour
+#define       KNX_STATE_EXPIRY_MS   3900000     // 65 minutes
 
 // Max number of supported inputs
 const uint8_t MAX_INPUT_COUNT       = MCP_COUNT * MCP_PIN_COUNT;
