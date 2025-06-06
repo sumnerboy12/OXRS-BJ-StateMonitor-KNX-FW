@@ -69,9 +69,6 @@ const uint8_t KNX_READ_QUEUE_SIZE   = MAX_INPUT_COUNT;
 // Used to store KNX config/state
 struct KnxConfig
 {
-  // config option to only send KNX commands if in failover mode
-  bool failoverOnly;
-
   // address for sending on/off/up/down commands to the KNX actuator
   uint16_t commandAddress;
   // address for listening for status messages from the KNX actuator
@@ -93,9 +90,6 @@ bool g_queryInputs = false;
 
 // Publish Home Assistant self-discovery config for each input
 bool g_hassDiscoveryPublished[MAX_INPUT_COUNT];
-
-// Force KNX failover flag
-bool g_forceFailover = false;
 
 // KNX config for every input
 KnxConfig g_knxConfig[MAX_INPUT_COUNT];
@@ -676,10 +670,6 @@ void setConfigSchema()
   knxStateAddress["type"] = "string";
   knxStateAddress["pattern"] = "^\\d+\\/\\d+\\/\\d+$";
 
-  JsonObject knxFailoverOnly = properties["knxFailoverOnly"].to<JsonObject>();
-  knxFailoverOnly["title"] = "KNX Failover Only";
-  knxFailoverOnly["type"] = "boolean";
-
   JsonArray required = items["required"].to<JsonArray>();
   required.add("index");
 
@@ -786,11 +776,6 @@ void jsonInputConfig(JsonVariant json)
     g_knxConfig[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
     pushQueue(g_knxConfig[index - 1].stateAddress);
   }
-
-  if (json.containsKey("knxFailoverOnly"))
-  {
-    g_knxConfig[index - 1].failoverOnly = json["knxFailoverOnly"].as<bool>();
-  }
 }
 
 void jsonConfig(JsonVariant json)
@@ -838,11 +823,6 @@ void setCommandSchema()
   queryInputs["description"] = "Query and publish the state of all bi-stable inputs.";
   queryInputs["type"] = "boolean";
 
-  JsonObject forceFailover = json["forceFailover"].to<JsonObject>();
-  forceFailover["title"] = "Force KNX";
-  forceFailover["description"] = "By-pass publishing input events to MQTT and always publish to KNX, regardless of IP/MQTT connection state.";
-  forceFailover["type"] = "boolean";
-
   JsonObject knxCommands = json["knxCommands"].to<JsonObject>();
   knxCommands["title"] = "KNX Commands";
   knxCommands["description"] = "Send one or more telegrams directly onto the KNX bus.";
@@ -873,11 +853,6 @@ void jsonCommand(JsonVariant json)
     g_queryInputs = json["queryInputs"].as<bool>();
   }
 
-  if (json.containsKey("forceFailover"))
-  {
-    g_forceFailover = json["forceFailover"].as<bool>();
-  }
-
   if (json.containsKey("knxCommands"))
   {
     for (JsonVariant command : json["knxCommands"].as<JsonArray>())
@@ -904,7 +879,7 @@ void jsonCommand(JsonVariant json)
   }
 }
 
-void publishEvent(uint8_t index, uint8_t type, uint8_t state)
+void publishMqttEvent(uint8_t index, uint8_t type, uint8_t state)
 {
   // Calculate the port and channel for this index (all 1-based)
   uint8_t port = ((index - 1) / 4) + 1;
@@ -922,18 +897,8 @@ void publishEvent(uint8_t index, uint8_t type, uint8_t state)
   json["type"] = inputType;
   json["event"] = eventType;
 
-  // Always publish this event to MQTT, unless in forced failover
-  bool failover = g_forceFailover;
-  if (!failover)
-  {
-    failover = !oxrs.publishStatus(json.as<JsonVariant>());
-  }
-
-  // Always publish this event to KNX, unless not in failover and failover-only enabled
-  if (failover || !g_knxConfig[index - 1].failoverOnly)
-  {
-    publishKnxEvent(index, type, state);
-  }
+  // Publish this event to MQTT
+  oxrs.publishStatus(json.as<JsonVariant>());
 }
 
 void publishHassDiscovery(uint8_t mcp)
@@ -1018,8 +983,11 @@ void inputEvent(uint8_t id, uint8_t input, uint8_t type, uint8_t state)
   uint8_t mcp = id;
   uint8_t index = (MCP_PIN_COUNT * mcp) + input + 1;
 
-  // Publish the event
-  publishEvent(index, type, state);
+  // Publish this event to KNX
+  publishKnxEvent(index, type, state);
+
+  // Publish this event to MQTT
+  publishMqttEvent(index, type, state);
 }
 
 /**
