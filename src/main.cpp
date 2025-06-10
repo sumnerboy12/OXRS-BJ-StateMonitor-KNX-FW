@@ -57,6 +57,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 
 #define       KNX_RESET_TIMEOUT_MS  5000        // 5 seconds
 #define       KNX_READ_TIMEOUT_MS   5000        // 5 seconds
+#define       KNX_READ_TIMEOUT_MAX  10          // stop trying after 10 failures
 #define       KNX_STATE_EXPIRY_MS   3900000     // 65 minutes
 
 // Max number of supported inputs
@@ -79,6 +80,9 @@ struct KnxConfig
 
   // last time a state update was received
   uint32_t lastStateUpdateMs;
+
+  // how many times we have timed out waiting for the state address
+  uint8_t stateReadTimeouts;
 };
 
 /*--------------------------- Global Variables ------------------------*/
@@ -95,11 +99,11 @@ bool g_hassDiscoveryPublished[MAX_INPUT_COUNT];
 KnxConfig g_knxConfig[MAX_INPUT_COUNT];
 
 // A queue for controlling group read requests for KNX state updates
-uint16_t g_knxReadQueue[KNX_READ_QUEUE_SIZE];
+uint8_t  g_knxReadQueue[KNX_READ_QUEUE_SIZE];
 uint8_t  g_knxReadQueueHeadIdx = 0;
 uint8_t  g_knxReadQueueTailIdx = 0;
 
-uint16_t g_knxReadWaitAddress = 0;
+uint16_t g_knxReadWaitIdx = -1;
 uint32_t g_knxReadWaitSince = 0;
 
 /*--------------------------- Instantiate Globals ---------------------*/
@@ -339,6 +343,18 @@ void setDefaultInputType(uint8_t inputType)
 /**
   KNX
 */
+void startReadWaitTimer(uint8_t index)
+{
+  g_knxReadWaitIdx = index;
+  g_knxReadWaitSince = millis();
+}
+
+void clearReadWaitTimer()
+{
+  g_knxReadWaitIdx = -1;
+  g_knxReadWaitSince = 0;
+}
+
 bool knxTelegramCheck(KnxTelegram * telegram)
 {
   // Check this is a message sent to a target group 
@@ -385,15 +401,15 @@ void knxTelegram(KnxTelegram * telegram, bool interesting)
     {
       g_knxConfig[i].state = value;
       g_knxConfig[i].lastStateUpdateMs = millis();
-    }
-  }
+      g_knxConfig[i].stateReadTimeouts = 0;
 
-  // If this was the address we were waiting on, then clear so we can move onto
-  // the next item in the queue
-  if (g_knxReadWaitAddress == targetAddress)
-  {
-    g_knxReadWaitAddress = 0;
-    g_knxReadWaitSince = 0;
+      // If this was the address we were waiting on, then clear the read wait 
+      // timer so we can move onto the next item in the queue
+      if (i == g_knxReadWaitIdx)
+      {
+        clearReadWaitTimer();
+      }
+    }
   }
 }
 
@@ -402,7 +418,7 @@ bool isQueueEmpty()
   return g_knxReadQueueHeadIdx == g_knxReadQueueTailIdx;
 }
 
-bool isQueued(uint16_t address)
+bool isQueued(uint8_t queueItem)
 {
   if (isQueueEmpty())
     return false;
@@ -413,7 +429,7 @@ bool isQueued(uint16_t address)
     // Check from the tail to the head
     for (uint16_t i = g_knxReadQueueTailIdx; i < g_knxReadQueueHeadIdx; i++)
     {
-      if (g_knxReadQueue[i] == address)
+      if (g_knxReadQueue[i] == queueItem)
         return true;
     }
   }
@@ -422,14 +438,14 @@ bool isQueued(uint16_t address)
     // Check from the tail to the end of the queue
     for (uint16_t i = g_knxReadQueueTailIdx; i < KNX_READ_QUEUE_SIZE; i++)
     {
-      if (g_knxReadQueue[i] == address)
+      if (g_knxReadQueue[i] == queueItem)
         return true;
     }
 
     // Check from the start of the queue to the head
     for (uint16_t i = 0; i < g_knxReadQueueHeadIdx; i++)
     {
-      if (g_knxReadQueue[i] == address)
+      if (g_knxReadQueue[i] == queueItem)
         return true;
     }
   }
@@ -443,21 +459,20 @@ void flushQueue()
   g_knxReadQueueHeadIdx = 0;
   g_knxReadQueueTailIdx = 0;
 
-  // Clear the timeout timer
-  g_knxReadWaitAddress = 0;
-  g_knxReadWaitSince = 0;
+  // Clear the read wait timer
+  clearReadWaitTimer();
 }
 
-void pushQueue(uint16_t address)
+void pushQueue(uint8_t queueItem)
 {
-  if (address == 0)
+  if (queueItem < 0 || queueItem >= MAX_INPUT_COUNT)
     return;
 
-  if (isQueued(address))
+  if (isQueued(queueItem))
     return;
 
   // Insert at the head of the queue
-  g_knxReadQueue[g_knxReadQueueHeadIdx] = address;
+  g_knxReadQueue[g_knxReadQueueHeadIdx] = queueItem;
 
   // Increment the head and if we reach the end circle back to the start
   g_knxReadQueueHeadIdx++;
@@ -467,13 +482,13 @@ void pushQueue(uint16_t address)
   }
 }
 
-uint16_t popQueue()
+uint8_t popQueue()
 {
   if (isQueueEmpty())
     return 0;
   
   // Retrieve from the tail of the queue
-  uint16_t address = g_knxReadQueue[g_knxReadQueueTailIdx];
+  uint8_t queueItem = g_knxReadQueue[g_knxReadQueueTailIdx];
 
   // Increment the tail and if we reach the end circle back to the start
   g_knxReadQueueTailIdx++;
@@ -482,7 +497,7 @@ uint16_t popQueue()
     g_knxReadQueueTailIdx = 0;
   }
 
-  return address;
+  return queueItem;
 }
 
 void initialiseKnx()
@@ -523,27 +538,35 @@ void loopKnx()
   knx.serialEvent();
 
   // Are we waiting on a read response?
-  if (g_knxReadWaitAddress == 0)
+  if (g_knxReadWaitIdx < 0)
   {
     // If we are not waiting then check the queue
-    uint16_t address = popQueue();
-    if (address != 0)
+    uint8_t idx = popQueue();
+    if (idx >= 0)
     {
       // Something was on the queue so send a read request
-      knx.groupRead(address);
+      knx.groupRead(g_knxConfig[idx].stateAddress);
 
-      // Start the timeout timer
-      g_knxReadWaitAddress = address;
-      g_knxReadWaitSince = millis();
+      // Start the read wait timer
+      startReadWaitTimer(idx);
     }
     else
     {
       // Queue is empty so check if there are any addresses that have expired state
       for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
       {
+        // Ignore any without a state address
+        if (g_knxConfig[i].stateAddress == 0)
+          continue;
+
+        // Ignore any that have timed out too many times
+        if (g_knxConfig[i].stateReadTimeouts >= KNX_READ_TIMEOUT_MAX)
+          continue;
+
+        // If it has been too long since the last state update, push to the queue
         if ((millis() - g_knxConfig[i].lastStateUpdateMs) > KNX_STATE_EXPIRY_MS)
         {
-          pushQueue(g_knxConfig[i].stateAddress);
+          pushQueue(i);
         }
       }
     }
@@ -553,12 +576,14 @@ void loopKnx()
     // If we have timed out waiting for a response then re-queue and continue
     if ((millis() - g_knxReadWaitSince) > KNX_READ_TIMEOUT_MS)
     {
-      // Push this address back onto the queue
-      pushQueue(g_knxReadWaitAddress);
-      
-      // Clear the timeout timer
-      g_knxReadWaitAddress = 0;
-      g_knxReadWaitSince = 0;
+      // Push back onto the queue unless we have timed out too many times
+      if (g_knxConfig[g_knxReadWaitIdx].stateReadTimeouts++ < KNX_READ_TIMEOUT_MAX)
+      {
+        pushQueue(g_knxReadWaitIdx);
+      }
+
+      // Clear the read wait timer
+      clearReadWaitTimer();
     }
   }
 }
@@ -774,7 +799,12 @@ void jsonInputConfig(JsonVariant json)
   if (json.containsKey("knxStateAddress"))
   {
     g_knxConfig[index - 1].stateAddress = parseGroupAddress(json["knxStateAddress"]);
-    pushQueue(g_knxConfig[index - 1].stateAddress);
+
+    // Ensure we request the current state if there is any configuration change
+    if (g_knxConfig[index - 1].stateAddress != 0)
+    {
+      pushQueue(index - 1);
+    }
   }
 }
 
