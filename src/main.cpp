@@ -561,13 +561,16 @@ void loopKnx()
     else
     {
       // Pop the next item off the queue
-      uint8_t idx = popQueue();
+      uint8_t i = popQueue();
   
-      // Send a status read request
-      knx.groupRead(g_knxConfig[idx].stateAddress);
+      if (i >= 0 && i < MAX_INPUT_COUNT)
+      {
+        // Send a status read request
+        knx.groupRead(g_knxConfig[i].stateAddress);
 
-      // Start the read wait timer
-      startReadWaitTimer(idx);
+        // Start the read wait timer
+        startReadWaitTimer(i);
+      }
     }
   }
   else
