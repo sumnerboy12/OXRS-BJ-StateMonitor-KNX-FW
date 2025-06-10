@@ -465,9 +465,6 @@ void flushQueue()
 
 void pushQueue(uint8_t queueItem)
 {
-  if (queueItem < 0 || queueItem >= MAX_INPUT_COUNT)
-    return;
-
   if (isQueued(queueItem))
     return;
 
@@ -485,7 +482,7 @@ void pushQueue(uint8_t queueItem)
 uint8_t popQueue()
 {
   if (isQueueEmpty())
-    return 0;
+    return -1;
   
   // Retrieve from the tail of the queue
   uint8_t queueItem = g_knxReadQueue[g_knxReadQueueTailIdx];
@@ -541,16 +538,7 @@ void loopKnx()
   if (g_knxReadWaitIdx < 0)
   {
     // If we are not waiting then check the queue
-    uint8_t idx = popQueue();
-    if (idx >= 0)
-    {
-      // Something was on the queue so send a read request
-      knx.groupRead(g_knxConfig[idx].stateAddress);
-
-      // Start the read wait timer
-      startReadWaitTimer(idx);
-    }
-    else
+    if (isQueueEmpty())
     {
       // Queue is empty so check if there are any addresses that have expired state
       for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
@@ -569,6 +557,17 @@ void loopKnx()
           pushQueue(i);
         }
       }
+    }
+    else
+    {
+      // Pop the next item off the queue
+      uint8_t idx = popQueue();
+  
+      // Send a status read request
+      knx.groupRead(g_knxConfig[idx].stateAddress);
+
+      // Start the read wait timer
+      startReadWaitTimer(idx);
     }
   }
   else
