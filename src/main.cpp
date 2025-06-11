@@ -56,6 +56,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 #define       KNX_SERIAL_TX         17
 
 #define       KNX_RESET_TIMEOUT_MS  5000        // 5 seconds
+#define       KNX_READ_INTERVAL_MS  500         // 500 milliseconds
 #define       KNX_READ_TIMEOUT_MS   5000        // 5 seconds
 #define       KNX_READ_TIMEOUT_MAX  10          // stop trying after 10 failures
 #define       KNX_STATE_EXPIRY_MS   3900000     // 65 minutes
@@ -105,6 +106,9 @@ uint8_t  g_knxReadQueueTailIdx = 0;
 
 uint16_t g_knxReadWaitAddress = 0;
 uint32_t g_knxReadWaitSince = 0;
+
+// The last time a KNX read request was sent
+uint32_t g_knxLastReadMs = 0;
 
 /*--------------------------- Instantiate Globals ---------------------*/
 // I/O buffers
@@ -468,6 +472,13 @@ void flushQueue()
   // Clear the timeout timer
   g_knxReadWaitAddress = 0;
   g_knxReadWaitSince = 0;
+
+  // Reset the timers and timeout counts for all inputs
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+  {
+    g_knxConfig[i].stateUpdateTimeouts = 0;
+    g_knxConfig[i].lastStateUpdateMs = 0;
+  }
 }
 
 void pushQueue(uint16_t address)
@@ -475,6 +486,7 @@ void pushQueue(uint16_t address)
   if (address == 0)
     return;
 
+  // Don't queue if this address is already queued
   if (isQueued(address))
     return;
   
@@ -552,17 +564,7 @@ void loopKnx()
   if (g_knxReadWaitAddress == 0)
   {
     // If we are not waiting then check the queue
-    uint16_t address = popQueue();
-    if (address != 0)
-    {
-      // Something was on the queue so send a read request
-      knx.groupRead(address);
-
-      // Start the timeout timer
-      g_knxReadWaitAddress = address;
-      g_knxReadWaitSince = millis();
-    }
-    else
+    if (isQueueEmpty())
     {
       // Queue is empty so check if there are any addresses that have expired state
       for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
@@ -571,6 +573,29 @@ void loopKnx()
         {
           pushQueue(g_knxConfig[i].stateAddress);
         }
+      }
+    }
+    else
+    {
+      // Check if it is too soon to send another read request
+      if ((millis() - g_knxLastReadMs) > KNX_READ_INTERVAL_MS)
+      {
+        // Get the next address from the queue
+        uint16_t address = popQueue();
+
+        // Shouldn't happen, but just in case
+        if (address == 0)
+          return;
+
+        // Something was on the queue so send a read request
+        knx.groupRead(address);
+
+        // Start the timeout timer
+        g_knxReadWaitAddress = address;
+        g_knxReadWaitSince = millis();
+
+        // Reset the last read time
+        g_knxLastReadMs = millis();
       }
     }
   }
