@@ -57,6 +57,7 @@ const uint8_t MCP_COUNT             = sizeof(MCP_I2C_ADDRESS);
 
 #define       KNX_RESET_TIMEOUT_MS  5000        // 5 seconds
 #define       KNX_READ_TIMEOUT_MS   5000        // 5 seconds
+#define       KNX_READ_TIMEOUT_MAX  10          // stop trying after 10 failures
 #define       KNX_STATE_EXPIRY_MS   3900000     // 65 minutes
 
 // Max number of supported inputs
@@ -76,6 +77,9 @@ struct KnxConfig
 
   // current state of the KNX actuator
   bool state;
+
+  // how many times we have timed out waiting for a state update
+  uint8_t stateUpdateTimeouts;
 
   // last time a state update was received
   uint32_t lastStateUpdateMs;
@@ -384,6 +388,7 @@ void knxTelegram(KnxTelegram * telegram, bool interesting)
     if (g_knxConfig[i].stateAddress == targetAddress)
     {
       g_knxConfig[i].state = value;
+      g_knxConfig[i].stateUpdateTimeouts = 0;
       g_knxConfig[i].lastStateUpdateMs = millis();
     }
   }
@@ -437,6 +442,23 @@ bool isQueued(uint16_t address)
   return false;
 }
 
+bool hasTimedOut(uint16_t address)
+{
+  // Check if any inputs using this address have not timed out
+  for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+  {
+    if (g_knxConfig[i].stateAddress != address)
+      continue;
+
+    if (g_knxConfig[i].stateUpdateTimeouts < KNX_READ_TIMEOUT_MAX)
+      return false;
+  }
+
+  // If we get here either this address doesn't exist in our config
+  // or it has timed out for all inputs configured with it
+  return true;
+}
+
 void flushQueue()
 {
   // Clear the queue
@@ -454,6 +476,10 @@ void pushQueue(uint16_t address)
     return;
 
   if (isQueued(address))
+    return;
+  
+  // Don't queue if this address has timed out too many times
+  if (hasTimedOut(address))
     return;
 
   // Insert at the head of the queue
@@ -550,10 +576,19 @@ void loopKnx()
   }
   else
   {
-    // If we have timed out waiting for a response then re-queue and continue
+    // Check if we have timed out waiting for a response
     if ((millis() - g_knxReadWaitSince) > KNX_READ_TIMEOUT_MS)
     {
-      // Push this address back onto the queue
+      // Increment timeout counts for this address
+      for (uint8_t i = 0; i < MAX_INPUT_COUNT; i++)
+      {
+        if (g_knxConfig[i].stateAddress != g_knxReadWaitAddress)
+          continue;
+
+        g_knxConfig[i].stateUpdateTimeouts++;
+      }
+
+      // Push back onto the queue
       pushQueue(g_knxReadWaitAddress);
       
       // Clear the timeout timer
